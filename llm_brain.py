@@ -737,7 +737,7 @@ class LLMBrain:
         low    = text.lower().strip()
         result = {"action": "unknown", "target": "", "params": {}, "raw": text}
 
-        if any(w in low for w in ["play ", "pause", "resume", "skip", "next track",
+        if any(w in low for w in ["play ", "pause", "house", "stop", "resume", "skip", "next track",
                                    "stop music", "mute", "volume"]):
             result["action"] = "music"
             if "play " in low:
@@ -746,7 +746,7 @@ class LLMBrain:
                 result["action"] = "volume"
                 nums = re.findall(r'\d+', low)
                 result["params"]["level"] = int(nums[0]) if nums else 50
-            elif any(w in low for w in ["pause", "stop"]):
+            elif any(w in low for w in ["pause", "stop", "house"]):
                 result["target"] = "pause"
             elif any(w in low for w in ["skip", "next"]):
                 result["target"] = "next"

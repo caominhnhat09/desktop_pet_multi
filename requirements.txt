@@ -10,7 +10,7 @@ pyaudio>=0.2.13
 # openai-whisper>=20231117  # offline STT, optional
 
 # Notifications (pick one)
-winotify>=1.1.3
+winotify>=1.1.0
 # win10toast>=0.9  # alternative
 
 # Spotify Web API (optional)

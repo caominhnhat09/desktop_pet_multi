@@ -29,10 +29,13 @@ WAKE_WORDS = ["hey buddy", "okay dog", "hey dog", "buddy", "hey pet"]
 
 # Per-pet-type default wake words
 PET_WAKE_WORDS = {
-    "dog":    ["hey buddy", "okay dog", "hey dog", "buddy"],
+    "dog":    ["hey buddy", "okay dog", "hey dog", "hey doug", "buddy"],
     "dragon": ["hey dragon", "okay dragon", "dragon", "hey buddy"],
     "cat":    ["hey kitty", "hey cat", "okay kitty", "kitty", "hey buddy"],
 }
+
+# Sau khi chỉ gọi tên (không kèm lệnh), chờ lệnh ở câu kế tiếp trong N giây
+COMMAND_WINDOW = 8.0
 
 # Energy threshold for ambient noise (auto-calibrated on start)
 ENERGY_THRESHOLD = 300
@@ -49,6 +52,7 @@ class VoiceListener:
         self._sr_available    = False
         self._whisper_available = False
         self._command_q       = queue.Queue()
+        self._awaiting_until  = 0.0
         self._check_deps()
 
     def _check_deps(self):
@@ -183,25 +187,29 @@ class VoiceListener:
     # ── Command processing ────────────────────────────────────────────────
 
     def _process(self, text: str):
-        """Check for wake word, then fire command callback."""
-        # Check if text contains a wake word
+        """Wake word + lệnh trong cùng câu, hoặc wake word rồi lệnh ở câu kế tiếp."""
+        now = time.time()
         has_wake = any(w in text for w in self.wake_words)
 
         if has_wake:
-            # Strip wake word from command
             command = text
-            for w in self.wake_words:
-                command = command.replace(w, "").strip(" ,.")
+            # thay từ dài trước để "hey kitty" không bị cắt thành "hey" + "kitty"
+            for w in sorted(self.wake_words, key=len, reverse=True):
+                command = command.replace(w, "")
+            command = command.strip(" ,.")
             if self.on_wake:
                 self.on_wake()
             if command and self.on_command:
+                self._awaiting_until = 0.0
                 self.on_command(command)
-            elif self.on_command:
-                # Just the wake word alone = say hi
-                self.on_command("hello")
-        else:
-            # No wake word — ignore (background noise)
-            pass
+            else:
+                # chỉ gọi tên: chờ câu kế tiếp làm lệnh
+                self._awaiting_until = now + COMMAND_WINDOW
+        elif now < self._awaiting_until:
+            self._awaiting_until = 0.0
+            if self.on_command:
+                self.on_command(text)
+        # else: không có wake word, không trong cửa sổ chờ -> bỏ qua
 
     # ── Text input fallback (for testing without mic) ─────────────────────
 

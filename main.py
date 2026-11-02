@@ -227,6 +227,7 @@ class DesktopPet:
 
         # ── Cooldowns ─────────────────────────────────────────────────────
         self._t_app_speech        = 0.0
+        self._t_trick_speech      = 0.0
         self._t_idle_speech       = 0.0
         self._t_meet_speech       = 0.0
         self._t_zzz               = 0.0
@@ -1040,8 +1041,10 @@ class DesktopPet:
                         self.state.personality,
                     )
                     self.particles.emit_stars(5)
-                    self.brain.respond_async("just finished a trick!",
-                                             self._on_llm_response, "trick")
+                    if now - self._t_trick_speech > 120 and random.random() < 0.25:
+                        self._t_trick_speech = now
+                        self.brain.respond_async("just finished a trick!",
+                            self._on_llm_response, "trick")
                     self.behavior.finish_trick()
                     state = State.IDLE
             else:
