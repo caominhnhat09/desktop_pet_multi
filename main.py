@@ -8,7 +8,6 @@ Updates:
   • config_manager fix — exe reads/writes config next to .exe
   • Pet type persists across restarts via config.json "pet" key
   • Dream Journal — pet dreams while sleeping
-  • Evolution System — pet evolves at level 5 and 10
   • Fix: screen_time.tick() throttled to once per minute
   • Fix: random.uniform(60,90) was re-rolled every 16ms causing speech spam
   • Fix: weather reaction cooldown starts at now() not 0
@@ -44,9 +43,7 @@ from seasonal         import SeasonalManager
 from emotion_engine   import EmotionEngine
 from achievements     import AchievementSystem
 from dream_journal    import DreamJournal
-from evolution        import EvolutionSystem
 from startup_chooser  import show_chooser
-from evolution_animation import make_evolution_frames
 import sprite as dog_sprite
 import dragon_sprite
 import cat_sprite
@@ -172,11 +169,6 @@ class DesktopPet:
         self.brain.set_memory(self.memory)
         self.brain.set_pet_type(pet_type)
 
-        # ── Evolution system — init BEFORE anything calls switch_pet ──────
-        self.evolution      = EvolutionSystem(self.pet_type, self.state.level)
-        self._evo_frames    = []
-        self._evo_frame_idx = 0
-        self._evo_playing   = False
 
         # ── Emotion engine ────────────────────────────────────────────────
         self.emotion = EmotionEngine(
@@ -538,7 +530,6 @@ class DesktopPet:
         self._acc_cache  = {}
         self.brain.set_pet_type(pet_type)
         self.emotion.set_personality(self.state.personality, pet_type)
-        self.evolution.set_pet_type(pet_type, self.state.level)
         self.achievements.on_pet_switched(pet_type)
         from voice import PET_WAKE_WORDS
         self.voice.wake_words = [w.lower() for w in
@@ -621,7 +612,6 @@ class DesktopPet:
         facts  = self.memory._data.get("facts", {})
         user   = facts.get("user_name", "")
         ach_st = self.achievements.stats()
-        evo    = self.evolution.current_form
 
         dlg = tk.Toplevel(self.window.root)
         dlg.title("🐾 Pet Status")
@@ -631,7 +621,7 @@ class DesktopPet:
         dlg.configure(bg="#FAFAFA")
 
         lines = [
-            f"{evo.emoji}  {s.name}  [{s.personality.upper()}]  — {evo.form_name}",
+            f"🐾  {s.name}  [{s.personality.upper()}]  — {PET_TYPES[self.pet_type]['name']}",
             f"User: {user}" if user else "",
             "",
             f"Level {s.level}   XP [{bar}]  {int(s.xp)}/{xp_needed}",
@@ -651,7 +641,7 @@ class DesktopPet:
             f"Workspace: {ws}",
         ]
         for line in [l for l in lines if l is not None]:
-            bold = line.startswith(evo.emoji)
+            bold = line.startswith("🐾")
             tk.Label(dlg, text=line, bg="#FAFAFA",
                      font=("Segoe UI", 10, "bold" if bold else "normal"),
                      fg="#222233" if bold else "#444455",
@@ -687,48 +677,12 @@ class DesktopPet:
             self.particles.emit_levelup()
             self.notify.level_up(self.state.level)
 
-            new_form = self.evolution.check_evolution(self.state.level)
-            if new_form:
-                sprites = self.evolution.load_form_sprites(new_form)
-                if sprites:
-                    new_anims, new_tricks, new_icon_fn = sprites
-                    old_frame = self._get_frame()
-                    tmp_anim  = new_anims.get("idle", [None])[0]
-                    if tmp_anim:
-                        self._evo_frames    = make_evolution_frames(
-                            old_frame, tmp_anim, self.pet_type)
-                        self._evo_frame_idx = 0
-                        self._evo_playing   = True
-
-                    def _apply_evolution(anims=new_anims, tricks=new_tricks,
-                                         icon_fn=new_icon_fn, form=new_form):
-                        self._ANIMS      = anims
-                        self._TRICKS     = tricks
-                        self._TRICK_POOL = tricks
-                        self._icon_fn    = icon_fn
-                        self._acc_cache  = {}
-                        self._set_anim("idle")
-                        msg = self.evolution.get_evolution_message()
-                        self._queue(msg)
-                        self.particles.emit_levelup()
-                        try:
-                            self._tray._icon.icon = icon_fn(32)
-                        except Exception:
-                            pass
-                        print(f"[evolution] Now: {form.form_name} {form.emoji}")
-
-                    delay_ms = len(self._evo_frames) * 16 + 500
-                    self.window.root.after(delay_ms, _apply_evolution)
-                    self._queue(f"✨ Evolving into {new_form.form_name}!")
-                else:
-                    self._queue(f"Level {self.state.level}! Still growing... 🌟")
+            new = unlocked_accessories(self.state.level)
+            if new:
+                self._queue(f"Level {self.state.level}! "
+                            f"{new[-1].replace('_', ' ').title()} unlocked! 🎉")
             else:
-                new = unlocked_accessories(self.state.level)
-                if new:
-                    self._queue(f"Level {self.state.level}! "
-                                f"{new[-1].replace('_', ' ').title()} unlocked! 🎉")
-                else:
-                    self._queue(f"Level {self.state.level}! Getting stronger! 💪")
+                self._queue(f"Level {self.state.level}! Getting stronger! 💪")
 
     # ── Animation ─────────────────────────────────────────────────────────
 
@@ -1074,18 +1028,8 @@ class DesktopPet:
                 self.speech.say(self._queued_speech, int(self.x), int(self.y))
                 self._queued_speech = None
 
-            # Evolution animation override
-            if self._evo_playing and self._evo_frames:
-                evo_frame = self._evo_frames[self._evo_frame_idx]
-                self._evo_frame_idx += 1
-                if self._evo_frame_idx >= len(self._evo_frames):
-                    self._evo_playing   = False
-                    self._evo_frames    = []
-                    self._evo_frame_idx = 0
-                self.window.draw_frame(evo_frame)
-            else:
-                self._tick_anim()
-                self.window.draw_frame(self._get_frame())
+            self._tick_anim()
+            self.window.draw_frame(self._get_frame())
 
             self.particles.update_and_draw(int(self.x), int(self.y))
             self._update_pos(state, cursor)

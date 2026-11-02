@@ -104,7 +104,7 @@ def show_chooser(current_pet: str = "dog") -> str | None:
 
     # ── Subtitle ──────────────────────────────────────────────────────────
     tk.Label(root,
-             text="Each pet has a unique personality and evolves as you level up.",
+             text="Each pet has a unique personality.",
              bg=BG, fg=TEXT2,
              font=("Segoe UI", 9)).pack(pady=(12, 4))
 
@@ -166,10 +166,7 @@ def show_chooser(current_pet: str = "dog") -> str | None:
                  font=("Segoe UI", 8),
                  wraplength=148, justify="center").pack(pady=(6, 2))
 
-        # Evolution path
-        tk.Label(card, text=info["evolutions"],
-                 bg=BG2, fg=GOLD,
-                 font=("Segoe UI", 7)).pack(pady=(0, 10))
+        tk.Label(card, text="", bg=BG2).pack(pady=(0, 6))
 
         # Radio button (hidden but functional)
         rb = tk.Radiobutton(card, variable=selected_var, value=pet_type,
@@ -234,11 +231,6 @@ def show_chooser(current_pet: str = "dog") -> str | None:
               relief="flat", padx=12, pady=8,
               cursor="hand2").pack(side="left", padx=6)
 
-    # ── Footer note ───────────────────────────────────────────────────────
-    tk.Label(root,
-             text="Each pet evolves into 2 additional forms as you level up 🌟",
-             bg=BG, fg=TEXT2,
-             font=("Segoe UI", 8)).pack(pady=(0, 8))
 
     root.mainloop()
     return result[0]
