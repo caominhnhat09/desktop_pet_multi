@@ -6,7 +6,6 @@ Tabs:
   💬 Chats      — conversation history
   📊 Apps       — app time bar charts
   💭 Emotions   — emotion history timeline
-  💤 Dreams     — dream journal (new)
   📈 Stats      — full summary + LLM context preview
 """
 
@@ -21,8 +20,6 @@ BG3       = "#22223A"
 ACCENT    = "#7C5CBF"
 ACCENT2   = "#1D9E75"
 RED       = "#E05555"
-DREAM_COL = "#2A1A3E"
-DREAM_ACC = "#9B59B6"
 TEXT      = "#E0E0F0"
 TEXT2     = "#9090AA"
 TEXT3     = "#555566"
@@ -44,12 +41,6 @@ FACT_LABELS = {
     "favorite":  "Your favourite",
 }
 
-PET_DREAM_EMOJI = {
-    "dog":    "🐶",
-    "dragon": "🐉",
-    "cat":    "🐱",
-}
-
 
 def _ts_to_str(ts: float) -> str:
     try:
@@ -59,10 +50,9 @@ def _ts_to_str(ts: float) -> str:
 
 
 class MemoryDashboard:
-    def __init__(self, root, memory_ref, dream_ref=None):
+    def __init__(self, root, memory_ref, *_unused):
         self._root   = root
         self._memory = memory_ref
-        self._dreams = dream_ref   # DreamJournal instance (optional)
         self._win    = None
 
     def open(self):
@@ -89,9 +79,8 @@ class MemoryDashboard:
                  bg=ACCENT, fg="white",
                  font=("Segoe UI", 13, "bold")).pack(side="left", padx=16, pady=12)
         sessions = self._memory._data.get("total_sessions", 1)
-        dream_count = self._dreams.total_dreams() if self._dreams else 0
         tk.Label(hdr,
-                 text=f"{sessions} sessions  •  {dream_count} dreams",
+                 text=f"{sessions} sessions",
                  bg=ACCENT, fg="#D0C0FF",
                  font=("Segoe UI", 9)).pack(side="right", padx=16)
 
@@ -114,7 +103,6 @@ class MemoryDashboard:
         self._build_exchanges(nb)
         self._build_apps(nb)
         self._build_emotions(nb)
-        self._build_dreams(nb)     # ← NEW
         self._build_stats(nb)
 
         # ── Footer ────────────────────────────────────────────────────────
@@ -153,6 +141,12 @@ class MemoryDashboard:
                  bg=BG, fg=TEXT2, font=("Segoe UI", 9)).pack(
                  anchor="w", padx=16, pady=(10, 4))
 
+        # Bản cũ pack ô này SAU canvas (side="left", expand) nên chỉ còn một khe hẹp
+        # bên phải -> nút "Add" bị khuất. Giờ pack xuống đáy trước.
+        bottom = tk.Frame(outer, bg=BG)
+        bottom.pack(side="bottom", fill="x")
+        self._add_new_fact_section(bottom)
+
         canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
         sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
@@ -178,8 +172,6 @@ class MemoryDashboard:
         else:
             for key, value in facts.items():
                 self._add_fact_row(inner, key, value)
-
-        self._add_new_fact_section(outer)
 
     def _add_fact_row(self, parent, key, value):
         label = FACT_LABELS.get(key, key.replace("_", " ").title())
@@ -310,7 +302,8 @@ class MemoryDashboard:
                  anchor="w", padx=16, pady=(10, 6))
 
         app_time    = self._memory._data.get("app_time", {})
-        sorted_apps = sorted(app_time.items(), key=lambda x: x[1], reverse=True)
+        sorted_apps = sorted(((k, v) for k, v in app_time.items() if v > 0.0),
+                             key=lambda x: x[1], reverse=True)
         max_mins    = sorted_apps[0][1] if sorted_apps else 1
 
         canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
@@ -341,7 +334,7 @@ class MemoryDashboard:
                 pct = max(0.01, mins / max_mins)
                 tk.Frame(bar_frame, bg=ACCENT, height=14).place(
                     relx=0, rely=0, relwidth=pct, relheight=1)
-                tk.Label(row, text=f"{mins:.0f}m",
+                tk.Label(row, text=self._fmt_minutes(mins),
                          bg=BG, fg=TEXT2,
                          font=("Segoe UI", 8), width=6).pack(side="right", padx=4)
 
@@ -349,6 +342,14 @@ class MemoryDashboard:
                   command=self._clear_apps,
                   bg=BG2, fg=RED, font=("Segoe UI", 8),
                   relief="flat", cursor="hand2").pack(anchor="e", padx=12, pady=6)
+
+    @staticmethod
+    def _fmt_minutes(mins: float) -> str:
+        if mins >= 120:
+            return f"{mins / 60:.1f}h"
+        if mins >= 1:
+            return f"{mins:.0f}m"
+        return f"{mins * 60:.0f}s"          # dưới 1 phút: hiện giây thay vì "0m"
 
     def _clear_apps(self):
         if messagebox.askyesno("Reset App Stats", "Clear all app time data?",
@@ -409,113 +410,23 @@ class MemoryDashboard:
                          bg=BG2, fg=TEXT2,
                          font=("Segoe UI", 7)).pack(side="right", padx=8)
 
-    # ── Dreams tab ────────────────────────────────────────────────────────
-
-    def _build_dreams(self, nb):
-        f = ttk.Frame(nb, style="Mem.TFrame")
-        nb.add(f, text="💤 Dreams")
-
-        if not self._dreams:
-            tk.Label(f,
-                     text="💤",
-                     font=("Segoe UI Emoji", 36), bg=BG).pack(pady=(40, 8))
-            tk.Label(f, text="No dreams yet",
-                     bg=BG, fg=TEXT,
-                     font=("Segoe UI", 13, "bold")).pack()
-            tk.Label(f,
-                     text="Leave your pet sleeping for 10+ minutes\nand it will dream based on your memories.",
-                     bg=BG, fg=TEXT2,
-                     font=("Segoe UI", 9),
-                     justify="center").pack(pady=(8, 0))
-            return
-
-        all_dreams = self._dreams.all_dreams()
-
-        # Header row
-        header = tk.Frame(f, bg=BG)
-        header.pack(fill="x", padx=12, pady=(10, 4))
-        tk.Label(header,
-                 text=f"💤 {len(all_dreams)} dreams recorded",
-                 bg=BG, fg=TEXT2,
-                 font=("Segoe UI", 9)).pack(side="left")
-        tk.Button(header, text="Clear dreams",
-                  command=self._clear_dreams,
-                  bg=BG2, fg=RED, font=("Segoe UI", 8),
-                  relief="flat", cursor="hand2").pack(side="right")
-
-        # Scrollable dream cards
-        canvas = tk.Canvas(f, bg=BG, highlightthickness=0)
-        sb     = ttk.Scrollbar(f, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        canvas.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-        inner = tk.Frame(canvas, bg=BG)
-        cw    = canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.bind("<Configure>", lambda e: canvas.itemconfig(cw, width=e.width))
-        inner.bind("<Configure>", lambda e: canvas.configure(
-            scrollregion=canvas.bbox("all")))
-        canvas.bind_all("<MouseWheel>",
-            lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
-
-        for dream in all_dreams:
-            text     = dream.get("text", "").lstrip("💤 ")
-            pet_type = dream.get("pet_type", "dog")
-            ts       = dream.get("ts", 0)
-            date_str = dream.get("date", _ts_to_str(ts))
-            pet_emoji = PET_DREAM_EMOJI.get(pet_type, "🐾")
-
-            card = tk.Frame(inner, bg=DREAM_COL)
-            card.pack(fill="x", padx=4, pady=3)
-
-            # Left accent stripe
-            tk.Frame(card, bg=DREAM_ACC, width=4).pack(side="left", fill="y")
-
-            content = tk.Frame(card, bg=DREAM_COL)
-            content.pack(side="left", fill="both", expand=True, padx=10, pady=8)
-
-            top_row = tk.Frame(content, bg=DREAM_COL)
-            top_row.pack(fill="x")
-            tk.Label(top_row, text=f"{pet_emoji} 💤",
-                     bg=DREAM_COL,
-                     font=("Segoe UI Emoji", 12)).pack(side="left")
-            tk.Label(top_row, text=date_str,
-                     bg=DREAM_COL, fg=TEXT3,
-                     font=("Segoe UI", 7)).pack(side="right")
-
-            tk.Label(content, text=text,
-                     bg=DREAM_COL, fg=TEXT,
-                     font=("Segoe UI", 9),
-                     anchor="w", wraplength=400,
-                     justify="left").pack(fill="x", pady=(4, 0))
-
-    def _clear_dreams(self):
-        if self._dreams and messagebox.askyesno(
-                "Clear Dreams", "Delete all dream history?", parent=self._win):
-            self._dreams.clear()
-            self._win.destroy(); self._build()
-
-    # ── Stats tab ─────────────────────────────────────────────────────────
-
     def _build_stats(self, nb):
         f = ttk.Frame(nb, style="Mem.TFrame")
         nb.add(f, text="📈 Stats")
 
         d        = self._memory._data
         peak     = d.get("peak_hours", [])
-        peak_str = ", ".join(f"{h}:00" for h in peak) if peak else "Not tracked yet"
+        peak_str = ", ".join(f"{h}:00" for h in peak) if peak else "Not enough data yet"
         nights   = d.get("late_nights", 0)
         sessions = d.get("total_sessions", 1)
         chats    = len(d.get("exchanges", [])) // 2
         facts_n  = len(d.get("facts", {}))
         top_apps = self._memory.top_apps(5)
-        dreams_n = self._dreams.total_dreams() if self._dreams else 0
 
         rows = [
             ("🗓  Sessions together",  str(sessions)),
             ("💬  Conversations",       str(chats)),
             ("📋  Facts learned",       str(facts_n)),
-            ("💤  Dreams recorded",     str(dreams_n)),
             ("🌙  Late night sessions", str(nights)),
             ("⏰  Most active hours",   peak_str),
             ("📱  Top apps",            ", ".join(top_apps) if top_apps else "None yet"),
@@ -571,8 +482,7 @@ class MemoryDashboard:
             f"• All {len(self._memory._data.get('facts', {}))} learned facts\n"
             f"• All {len(self._memory._data.get('exchanges', []))//2} conversations\n"
             f"• All emotion history\n"
-            f"• All app time data\n"
-            f"• All {self._dreams.total_dreams() if self._dreams else 0} dreams\n\n"
+            f"• All app time and activity-hours data\n\n"
             f"This CANNOT be undone.\n\nAre you sure?",
             parent=self._win
         ):
@@ -580,8 +490,8 @@ class MemoryDashboard:
             self._memory._data["exchanges"] = []
             self._memory._data["emotions"]  = []
             self._memory._data["app_time"]  = {}
+            self._memory._data["hour_counts"] = {}
+            self._memory._data["peak_hours"]  = []
             self._memory._data["topics"]    = []
             self._memory.save()
-            if self._dreams:
-                self._dreams.clear()
             self._win.destroy(); self._build()

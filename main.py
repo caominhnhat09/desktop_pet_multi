@@ -7,13 +7,13 @@ Updates:
   • Text command fact extraction — tray dialog learns from typed commands
   • config_manager fix — exe reads/writes config next to .exe
   • Pet type persists across restarts via config.json "pet" key
-  • Dream Journal — pet dreams while sleeping
+  • Pomodoro focus/break reminders, real one-shot timers with sound
   • Fix: screen_time.tick() throttled to once per minute
   • Fix: random.uniform(60,90) was re-rolled every 16ms causing speech spam
-  • Fix: weather reaction cooldown starts at now() not 0
+  • Removed: Dream Journal, Weather
 """
 
-import sys, os, time, random, argparse
+import sys, os, time, random, argparse, threading
 sys.path.insert(0, os.path.dirname(__file__))
 import config_manager
 
@@ -26,23 +26,22 @@ from particles        import ParticleSystem
 from speech           import SpeechBubble
 from day_night        import (current_period, period_tint, is_night, is_morning,
                                get_idle_seconds, AppWatcher, WindowAvoider)
-from reminders        import ReminderSystem
+from reminders        import ReminderSystem, FOCUS_CHOICES
 from llm_brain        import LLMBrain
 from voice            import VoiceListener
 from command_handler  import CommandHandler
 from accessories      import apply_accessory, unlocked_accessories, ACCESSORIES
 from google_workspace import GoogleWorkspace
+import alert_sound
 from notifications    import NotificationManager
 from hud              import PetHUD
 from updater          import UpdateChecker
 from memory           import PetMemory
-from weather          import WeatherWatcher
 from clipboard_watcher import ClipboardWatcher, get_clipboard_quip
 from screen_time      import ScreenTimeTracker
 from seasonal         import SeasonalManager
 from emotion_engine   import EmotionEngine
 from achievements     import AchievementSystem
-from dream_journal    import DreamJournal
 from startup_chooser  import show_chooser
 import sprite as dog_sprite
 import dragon_sprite
@@ -161,9 +160,8 @@ class DesktopPet:
             owner="yourusername", repo="ascii-pet",
             callback=self._on_update_found)
 
-        # ── Memory, weather, clipboard, seasonal ──────────────────────────
+        # ── Memory, clipboard, seasonal ───────────────────────────────────
         self.memory      = PetMemory()
-        self.weather     = WeatherWatcher()
         self.screen_time = ScreenTimeTracker()
         self.seasonal    = SeasonalManager()
         self.brain.set_memory(self.memory)
@@ -185,15 +183,16 @@ class DesktopPet:
         )
         self.achievements.on_pet_named(self.state.name)
 
-        # ── Dream journal ─────────────────────────────────────────────────
-        self.dreams = DreamJournal(self.memory)
-        self.window.root.after(4000, self._init_dream_journal)
+        # ── Timers / quit state ───────────────────────────────────────────
+        self._timers     = []          # threading.Timer đang chờ
+        self._timer_ack  = False       # bấm vào pet = tắt chuông hẹn giờ
+        self._quitting   = False
+        self._t_last_tick = time.monotonic()
 
         # ── Clipboard ─────────────────────────────────────────────────────
         self.clipboard = ClipboardWatcher(on_change=self._on_clipboard)
         self.clipboard.start()
 
-        self._t_weather_react = time.monotonic()  # start at NOW — prevents instant fire
         self._hover_start     = 0.0
         self._petting_active  = False
 
@@ -302,12 +301,6 @@ class DesktopPet:
             if not self.voice.start():
                 print("[pet] Voice disabled.")
 
-    def _init_dream_journal(self):
-        self.dreams.set_ollama(
-            self.brain.is_available,
-            self.brain._model,
-        )
-
     # ── Shadow rendering ──────────────────────────────────────────────────
 
     def _draw_shadow(self):
@@ -388,17 +381,40 @@ class DesktopPet:
         menu.add_command(label="⚙️ Settings",    command=self.open_settings)
         menu.add_command(label="Pet Status",     command=self.show_status_dialog)
         menu.add_separator()
-        menu.add_command(label="Quit",           command=self.window.root.destroy)
+        menu.add_command(label="Quit",           command=self.quit_app)
         try:
             menu.tk_popup(e.x_root, e.y_root)
         finally:
-            menu.grab_release()
+            try:
+                menu.grab_release()
+            except Exception:      # cửa sổ có thể đã đóng nếu vừa bấm Quit
+                pass
+
+    def quit_app(self):
+        """Thoát an toàn. KHÔNG destroy() ngay: vòng tick/bong bóng đang chạy sẽ gọi
+        vào cửa sổ đã chết -> TclError 'NULL main window'. Thay vào đó: báo cho tick
+        dừng, thoát mainloop; run() lưu dữ liệu rồi mới destroy."""
+        if self._quitting:
+            return
+        self._quitting = True
+        self._timer_ack = True
+        for t in self._timers:
+            t.cancel()
+        try:
+            self.speech.hide()
+        except Exception:
+            pass
+        try:
+            self.window.root.quit()
+        except Exception:
+            pass
 
     def _on_double_click(self, e):
         if not self._dragging:
             self.do_trick()
 
     def _on_press(self, e):
+        self._timer_ack = True         # bấm vào pet = tắt chuông hẹn giờ đang kêu
         self._drag_ox  = e.x_root - self.window.root.winfo_x()
         self._drag_oy  = e.y_root - self.window.root.winfo_y()
         self._press_x  = e.x_root
@@ -548,7 +564,79 @@ class DesktopPet:
             self.hud._hide()
 
     def set_reminder(self, m):
+        """Đổi độ dài FOCUS của Pomodoro (phút, 0 = tắt). KHÔNG phải hẹn giờ."""
         self.reminder.set_interval(m)
+
+    # ── Hẹn giờ một lần: "set timer 5 minutes" ────────────────────────────
+
+    @staticmethod
+    def _fmt_duration(sec: int) -> str:
+        if sec >= 3600:
+            h, m = divmod(sec // 60, 60)
+            return f"{h}h {m}m" if m else f"{h}h"
+        if sec >= 60:
+            m, s = divmod(sec, 60)
+            return f"{m} min" if not s else f"{m}m {s}s"
+        return f"{sec}s"
+
+    def set_timer(self, seconds: int) -> str:
+        seconds = max(5, int(seconds))
+        label   = self._fmt_duration(seconds)
+        due     = time.strftime("%H:%M", time.localtime(time.time() + seconds))
+        t = threading.Timer(seconds, self._timer_fired, args=(label,))
+        t.daemon = True
+        t.start()
+        self._timers = [x for x in self._timers if x.is_alive()] + [t]
+        return f"Timer set: {label} ⏰ (rings at {due})"
+
+    def cancel_timers(self) -> int:
+        n = sum(1 for t in self._timers if t.is_alive())
+        for t in self._timers:
+            t.cancel()
+        self._timers    = []
+        self._timer_ack = True         # dừng luôn chuông đang kêu (nếu có)
+        return n
+
+    def _timer_fired(self, label: str):
+        """Chạy ở luồng của threading.Timer: kêu chuông, nhắc lại tới 2 lần nếu chưa ai bấm."""
+        self._timer_ack = False
+        for i, wait in enumerate((0, 20, 40)):
+            end = time.monotonic() + wait
+            while time.monotonic() < end:
+                if self._timer_ack or self._quitting:
+                    return
+                time.sleep(0.25)
+            if self._timer_ack or self._quitting:
+                return
+            msg = (f"⏰ Time's up! Your {label} timer is done!" if i == 0
+                   else "⏰ Still ringing! Click me to stop the alarm.")
+            try:
+                self.window.root.after(0, lambda m=msg, f=(i == 0): self._show_alarm(m, f))
+            except Exception:          # cửa sổ đã đóng
+                return
+            alert_sound.play("timer", blocking=True)
+
+    def _show_alarm(self, msg: str, first: bool):
+        if self._quitting:
+            return
+        self.speech.say(msg, int(self.x), int(self.y),
+                        duration_ms=12000, lift=self._speech_lift())
+        self.particles.emit_exclaim()
+        if first:
+            self.do_trick()
+            try:
+                self.notify.show("Timer ⏰", msg)
+            except Exception:
+                pass
+
+    def _speech_lift(self) -> int:
+        """Nâng bong bóng lên trên thanh HUD (nếu HUD đang hiện)."""
+        try:
+            if self.hud_enabled and self.hud._visible:
+                return self.hud.H + 6
+        except Exception:
+            pass
+        return 0
 
     def open_settings(self):
         from settings_window import SettingsWindow
@@ -603,7 +691,6 @@ class DesktopPet:
         brain  = f"Ollama: {self.brain._model}" if self.brain.is_available else "Built-in"
         ws     = "Connected ✅" if self.workspace.is_available else "Not configured"
         acc    = self._active_accessory or "none"
-        wthr   = self.weather.summary() or "unavailable"
         sess   = self.memory.session_summary()
         top    = ", ".join(self.memory.top_apps(3)) or "none tracked"
         streak = self.screen_time.streak_summary()
@@ -631,12 +718,12 @@ class DesktopPet:
             "",
             f"🏆 {ach_st['unlocked']}/{ach_st['total']} achievements  •  {ach_st['total_xp']:,} XP",
             f"🔥 {streak}   |   {today}   |   {total}",
+            f"🍅 Focus streak: {self.screen_time.pomodoros_today} Pomodoro today",
             f"Tricks: {s._data.get('total_tricks', 0)}   Fed: {s._data.get('total_feeds', 0)}x",
             f"Accessory: {acc}",
             f"Sessions: {self.memory._data.get('total_sessions', 1)}   {sess}",
             f"Top apps: {top}",
             "",
-            f"Weather: {wthr}",
             f"LLM: {brain}",
             f"Workspace: {ws}",
         ]
@@ -843,17 +930,6 @@ class DesktopPet:
             self._t_llm_idle          = now
             self._t_llm_idle_interval = random.uniform(60, 90)
 
-        # ── Weather reaction — starts at now() so no instant fire on startup ──
-        if self.weather.is_available:
-            if self.weather.changed and now - self._t_weather_react > 300:
-                self._queue(self.weather.get_reaction())
-                self._t_weather_react = now
-                self.weather.changed  = False
-            elif now - self._t_weather_react > 3600:
-                if random.random() < 0.3:
-                    self._queue(self.weather.get_reaction())
-                    self._t_weather_react = now
-
         if self.state.is_starving and now - self._t_idle_speech > 25:
             if random.random() < 0.04:
                 self.brain.respond_async("I am absolutely starving",
@@ -890,7 +966,11 @@ class DesktopPet:
 
     def run(self):
         def tick():
+            if self._quitting:         # đang thoát: dừng hẳn vòng lặp, không hẹn tick tiếp
+                return
             now    = time.monotonic()
+            dt     = min(now - self._t_last_tick, 1.0)   # thời gian THẬT giữa 2 tick
+            self._t_last_tick = now
             cursor = self.tracker.get_cursor_pos()
             cx_pet = int(self.x) + PET_W // 2
             cy_pet = int(self.y) + PET_H // 2
@@ -905,6 +985,9 @@ class DesktopPet:
                     self.particles.emit_levelup()
                     self.notify.level_up(self.screen_time.streak)
                 self._t_screen_time = now
+                # Ghi nhận 1 phút hoạt động thật (không AFK) cho "Most active hours"
+                if get_idle_seconds() < 60:
+                    self.memory.record_active_minute()
 
             if now - self._t_save > SAVE_INTERVAL:
                 self.state.save()
@@ -921,7 +1004,9 @@ class DesktopPet:
             # App context
             ctx = self.app_watch.get()
             self.state.record_app(ctx.foreground_exe)
-            self.memory.record_app_time(ctx.foreground_exe, 0.016)
+            # Dùng thời gian thật (dt) thay vì giả định mỗi tick = 16ms, và bỏ qua lúc AFK
+            if not self._afk_sleeping:
+                self.memory.record_app_time(ctx.foreground_exe, dt)
 
             # Emotion engine tick
             mood, intensity = self.emotion.tick(
@@ -952,20 +1037,12 @@ class DesktopPet:
             if idle > self._afk_sleep_sec and not self._afk_sleeping:
                 self._afk_sleeping = True
                 self.behavior._set(State.SLEEP)
-                self.dreams.on_sleep()
             elif idle < 3 and self._afk_sleeping:
                 self._afk_sleeping = False
                 self.behavior._set(State.IDLE)
                 self.particles.emit_sparkles(4)
                 self.brain.respond_async("user just came back",
                                          self._on_llm_response, "afk_return")
-                dream_text = self.dreams.on_wake()
-                if dream_text:
-                    self.window.root.after(2000,
-                        lambda d=dream_text: self._queue(d))
-
-            # Dream journal tick
-            self.dreams.tick(self.pet_type, self._afk_sleeping)
 
             # Trick queue
             if self.behavior._queued_trick:
@@ -1025,7 +1102,8 @@ class DesktopPet:
             self._pump_achievements()
 
             if self._queued_speech:
-                self.speech.say(self._queued_speech, int(self.x), int(self.y))
+                self.speech.say(self._queued_speech, int(self.x), int(self.y),
+                                lift=self._speech_lift())
                 self._queued_speech = None
 
             self._tick_anim()
@@ -1036,6 +1114,9 @@ class DesktopPet:
 
             if self.hud_enabled:
                 self.hud.update(int(self.x), int(self.y))
+
+            # Bong bóng chat đi theo pet khi pet di chuyển / bị kéo
+            self.speech.follow(int(self.x), int(self.y), self._speech_lift())
 
             self.updater.tick()
             self.window.root.after(16, tick)
@@ -1048,7 +1129,6 @@ class DesktopPet:
         self.memory.save()
         self.screen_time.save()
         self.achievements.save()
-        self.dreams.save()
         self.achievements.on_session_end(self.memory.session_duration_minutes())
         config_manager.save({
             "pet":           self.pet_type,
@@ -1059,6 +1139,7 @@ class DesktopPet:
             "last_x":        int(self.x),
             "last_y":        int(self.y),
             "reminder_min":  self.reminder._interval // 60,
+            "reminder_style": self.reminder.style,
             "afk_sleep_sec": self._afk_sleep_sec,
             "hud_enabled":   self.hud_enabled,
             "follow_speed":  self._follow_speed,
@@ -1067,12 +1148,17 @@ class DesktopPet:
         self.clipboard.stop()
         self.workspace.stop()
         self._tray.stop()
+        try:                           # đóng cửa sổ SAU khi mainloop đã dừng
+            self.window.root.destroy()
+        except Exception:
+            pass
 
 
 def main():
     p = argparse.ArgumentParser(description="Desktop Pet v9")
     p.add_argument("--speed",     default=1.0,   type=float)
-    p.add_argument("--reminder",  default=45,    type=int)
+    p.add_argument("--reminder",  default=None,  type=int,
+                   help="Focus length in minutes (default: saved setting, else 45; 0 = off)")
     p.add_argument("--no-voice",  action="store_true")
     p.add_argument("--pet",       default=None,
                    choices=["dog", "dragon", "cat"],
@@ -1106,10 +1192,17 @@ def main():
     config_manager.save(cfg)
  
     print(f"[pet] Starting with: {chosen_pet}")
- 
+
+    # Bản cũ luôn dùng 45 và bỏ qua giá trị đã lưu. Chỉ nhận các mức hợp lệ
+    # (config cũ có thể đang giữ giá trị lạ, vd 1 do lệnh "set timer" ghi đè).
+    reminder_min = args.reminder if args.reminder is not None \
+        else cfg.get("reminder_min", 45)
+    if reminder_min not in FOCUS_CHOICES:
+        reminder_min = 45
+
     DesktopPet(
         speed         = args.speed,
-        reminder_min  = args.reminder,
+        reminder_min  = reminder_min,
         voice_enabled = not args.no_voice,
         pet_type      = chosen_pet,
     ).run()

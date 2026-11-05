@@ -102,14 +102,13 @@ class CommandHandler:
         "firefox":"firefox","edge":"msedge","vs code":"code","vscode":"code",
         "notepad":"notepad","calculator":"calc","explorer":"explorer",
         "task manager":"taskmgr","discord":"discord","slack":"slack",
-        "terminal":"cmd","powershell":"powershell",
+        "terminal":"cmd","powershell":"powershell", "command line":"cmd",
         "word":"winword","microsoft word":"winword",
         "excel":"excel","microsoft excel":"excel",
         "powerpoint":"powerpnt","microsoft powerpoint":"powerpnt",
-        "paint":"mspaint",
+         "paint":"mspaint",
     }
 
-    # Trang web: mở bằng trình duyệt mặc định (đây KHÔNG phải chương trình .exe)
     WEB_MAP = {
         "youtube":         "https://www.youtube.com",
         "gmail":           "https://mail.google.com",
@@ -121,6 +120,7 @@ class CommandHandler:
         "calendar":        "https://calendar.google.com",
         "git hub":          "https://github.com",
         "github":          "https://github.com",
+        "git":          "https://github.com",
     }
 
     # App tự đăng ký giao thức riêng: mở bằng URI đáng tin hơn gọi tên .exe
@@ -183,7 +183,6 @@ class CommandHandler:
         return f"Can't find {target} 🤔"
 
     def _launch(self, exe: str) -> bool:
-        """Mở app và trả về True/False thật sự (Popen(shell=True) không báo lỗi)."""
         if not self._win32:
             try:
                 subprocess.Popen([exe]); return True
@@ -228,9 +227,15 @@ class CommandHandler:
     # ── Timer / search / feed / trick ─────────────────────────────────────
 
     def _set_timer(self, target: str, params: dict) -> str:
-        minutes = int(params.get("minutes", 5))
-        self._pet.set_reminder(minutes)
-        return f"Reminder in {minutes} min! ⏰"
+        # Bản cũ gọi set_reminder(), tức là ĐỔI chu kỳ nhắc nghỉ (và ghi đè cài đặt
+        # Reminders), chứ không hề hẹn giờ. Giờ là hẹn giờ một lần thật sự.
+        if params.get("cancel"):
+            n = self._pet.cancel_timers()
+            return "Timer cancelled! ⏹️" if n else "No timer is running 🤷"
+        seconds = params.get("seconds")
+        if seconds is None:
+            seconds = int(params.get("minutes", 5)) * 60
+        return self._pet.set_timer(seconds)
 
     def _search(self, target: str, params: dict) -> str:
         if not target: return "Search for what? 🤔"
@@ -241,8 +246,13 @@ class CommandHandler:
         self._pet.feed(); return ""
 
     def _trick(self, target: str, params: dict) -> str:
-        import sprite
-        if target and target != "random" and target in sprite.ANIMATIONS:
+        # Kiểm tra theo bộ hoạt ảnh của CHÍNH pet đang chạy (bản cũ luôn dùng của chó
+        # nên rồng/mèo nhận lệnh "roll", "flip"... mà không có hoạt ảnh nào để chơi).
+        anims = getattr(self._pet, "_ANIMS", None)
+        if anims is None:
+            import sprite
+            anims = sprite.ANIMATIONS
+        if target and target != "random" and target in anims:
             self._pet.behavior.current_trick = target
             self._pet.behavior._queued_trick = target
         else:

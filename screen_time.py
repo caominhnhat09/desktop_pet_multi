@@ -50,6 +50,7 @@ class ScreenTimeTracker:
             "last_date":      None,
             "total_hours":    0.0,
             "daily_log":      {},       # {date: minutes}
+            "pomodoro_log":   {},       # {date: {"count", "focus_min", "skipped"}}
             "milestones_hit": [],
         }
         if os.path.exists(SAVE_PATH):
@@ -174,6 +175,66 @@ class ScreenTimeTracker:
         if m < 60:
             return f"{m}min today"
         return f"{m//60}h {m%60}min today"
+
+    # ── Pomodoro / focus stats (dùng cho Reminders → Weekly report) ───────
+
+    def _pomo_today(self) -> dict:
+        log   = self._data.setdefault("pomodoro_log", {})
+        today = datetime.date.today().isoformat()
+        day   = log.setdefault(today, {"count": 0, "focus_min": 0.0, "skipped": 0})
+        if len(log) > 90:                                  # giữ 90 ngày gần nhất
+            for k in sorted(log.keys())[:-90]:
+                del log[k]
+        return day
+
+    def record_pomodoro(self, focus_minutes: float):
+        """Hoàn thành 1 Pomodoro (làm đủ focus + nghỉ đủ giờ)."""
+        day = self._pomo_today()
+        day["count"]     += 1
+        day["focus_min"]  = round(day["focus_min"] + float(focus_minutes), 1)
+        self.save()                                        # sự kiện hiếm -> lưu ngay
+
+    def record_skipped_break(self):
+        """Pet nhắc nghỉ nhưng người dùng không chịu rời máy."""
+        self._pomo_today()["skipped"] += 1
+        self.save()
+
+    @property
+    def pomodoros_today(self) -> int:
+        return self._data.get("pomodoro_log", {}).get(
+            datetime.date.today().isoformat(), {}).get("count", 0)
+
+    def weekly_report(self) -> list[dict]:
+        """7 ngày gần nhất (cũ -> mới): day, date, count, focus_min, skipped, pet_min."""
+        out   = []
+        today = datetime.date.today()
+        plog  = self._data.get("pomodoro_log", {})
+        dlog  = self._data.get("daily_log", {})
+        for i in range(6, -1, -1):
+            d   = today - datetime.timedelta(days=i)
+            iso = d.isoformat()
+            p   = plog.get(iso, {})
+            out.append({
+                "day":       d.strftime("%a"),
+                "date":      d.strftime("%d/%m"),
+                "count":     int(p.get("count", 0)),
+                "focus_min": float(p.get("focus_min", 0.0)),
+                "skipped":   int(p.get("skipped", 0)),
+                "pet_min":   float(dlog.get(iso, 0.0)),
+            })
+        return out
+
+    def weekly_totals(self) -> dict:
+        rep   = self.weekly_report()
+        total = sum(r["count"] for r in rep)
+        best  = max(rep, key=lambda r: (r["count"], r["focus_min"]))
+        return {
+            "pomodoros": total,
+            "focus_min": sum(r["focus_min"] for r in rep),
+            "skipped":   sum(r["skipped"] for r in rep),
+            "best_day":  best["day"] if best["count"] > 0 else "-",
+            "avg":       total / 7.0,
+        }
 
     def weekly_chart(self) -> list[tuple[str, float]]:
         """Last 7 days as [(day_name, minutes)]."""

@@ -79,8 +79,14 @@ class SpeechBubble:
         self._root     = root
         self._win      = None
         self._after_id = None
+        self._bw       = 0          # kích thước bong bóng (để định vị lại khi pet di chuyển)
+        self._bh       = 0
+        self._last_pos = None
 
-    def say(self, msg: str, pet_x: int, pet_y: int):
+    def say(self, msg: str, pet_x: int, pet_y: int,
+            duration_ms: int = None, lift: int = 0):
+        """Hiện bong bóng phía trên pet. duration_ms: thời gian hiện (mặc định SHOW_MS).
+        lift: nâng bong bóng lên thêm N pixel (để tránh thanh HUD phía trên pet)."""
         self._dismiss()
         self._win = tk.Toplevel(self._root)
         self._win.overrideredirect(True)
@@ -101,12 +107,33 @@ class SpeechBubble:
         tail.pack()
 
         self._win.update_idletasks()
-        bw = self._win.winfo_width()
-        bh = self._win.winfo_height()
-        bx = pet_x + 48 - bw//2
-        by = pet_y - bh - 2
-        self._win.geometry(f"+{max(4,bx)}+{max(4,by)}")
-        self._after_id = self._root.after(self.SHOW_MS, self._dismiss)
+        self._bw = self._win.winfo_width()
+        self._bh = self._win.winfo_height()
+        self._last_pos = None
+        self._place(pet_x, pet_y, lift)
+        self._after_id = self._root.after(duration_ms or self.SHOW_MS, self._dismiss)
+
+    def _place(self, pet_x: int, pet_y: int, lift: int = 0):
+        bx = pet_x + 48 - self._bw // 2
+        by = pet_y - self._bh - 2 - lift
+        pos = (max(4, bx), max(4, by))
+        if pos == self._last_pos:          # pet đứng yên -> không cần đặt lại
+            return
+        self._last_pos = pos
+        self._win.geometry(f"+{pos[0]}+{pos[1]}")
+
+    def follow(self, pet_x: int, pet_y: int, lift: int = 0):
+        """Gọi MỖI TICK: giữ bong bóng dính theo pet khi pet đi / bị kéo / nhảy."""
+        if not self._win:
+            return
+        try:
+            self._place(pet_x, pet_y, lift)
+        except Exception:                  # cửa sổ vừa bị huỷ giữa chừng
+            pass
+
+    def hide(self):
+        """Tắt bong bóng ngay (dùng khi thoát chương trình)."""
+        self._dismiss()
 
     def _dismiss(self):
         if self._after_id:

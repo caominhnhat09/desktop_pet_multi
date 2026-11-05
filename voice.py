@@ -25,13 +25,13 @@ import queue
 import time
 
 
-WAKE_WORDS = ["hey buddy", "okay dog", "hey dog", "buddy", "hey pet"]
+WAKE_WORDS = ["hey buddy", "okay dog", "hey dog", "buddy", "hey pet", 'dog']
 
 # Per-pet-type default wake words
 PET_WAKE_WORDS = {
-    "dog":    ["hey buddy", "okay dog", "hey dog", "hey doug", "buddy"],
+    "dog":    ["hey buddy", "okay dog", "hey dog", "hey doug", "buddy", 'dog'],
     "dragon": ["hey dragon", "okay dragon", "dragon", "hey buddy"],
-    "cat":    ["hey kitty", "hey cat", "okay kitty", "kitty", "hey buddy"],
+    "cat":    ["hey kitty", "hey cat", "okay kitty", "kitty", "hey buddy", 'cat'],
 }
 
 # Sau khi chỉ gọi tên (không kèm lệnh), chờ lệnh ở câu kế tiếp trong N giây

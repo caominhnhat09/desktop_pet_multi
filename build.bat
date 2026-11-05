@@ -30,7 +30,7 @@ for %%F in (
     main.py config_manager.py pet_window.py behavior.py
     pet_state.py llm_brain.py hud.py sprite.py dragon_sprite.py cat_sprite.py
     accessories.py particles.py speech.py day_night.py reminders.py
-    voice.py command_handler.py tray.py memory.py weather.py
+    voice.py command_handler.py tray.py memory.py alert_sound.py
     screen_time.py seasonal.py clipboard_watcher.py
     input_tracker.py notifications.py updater.py
 ) do (

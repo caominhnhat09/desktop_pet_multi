@@ -49,7 +49,7 @@ class SettingsWindow:
         win = tk.Toplevel(self._pet.window.root)
         self._win = win
         win.title("🐾 Desktop Pet Settings")
-        win.geometry("460x540")
+        win.geometry("460x600")
         win.resizable(False, False)
         win.configure(bg="#FAFAFA")
         win.wm_attributes("-topmost", True)
@@ -276,31 +276,124 @@ class SettingsWindow:
     def _build_reminders(self, nb):
         f = ttk.Frame(nb); nb.add(f, text="⏰ Reminders")
 
-        self._section(f, "Break Reminder Interval")
+        # ── Pomodoro: độ dài focus ────────────────────────────────────────
+        self._section(f, "Pomodoro — focus length, then a 10-min break")
         self._reminder_var = tk.IntVar(value=self._pet.reminder._interval // 60)
-        for text, val in [("Off", 0), ("20 min", 20), ("30 min", 30),
-                          ("45 min", 45), ("60 min", 60), ("90 min", 90)]:
-            tk.Radiobutton(f, text=text,
+        grid = tk.Frame(f, bg="#FAFAFA"); grid.pack(fill="x", padx=16)
+        for i, (text, val) in enumerate([("Off", 0), ("20 min", 20), ("30 min", 30),
+                                         ("45 min", 45), ("60 min", 60), ("90 min", 90)]):
+            tk.Radiobutton(grid, text=text,
                            variable=self._reminder_var, value=val,
                            bg="#FAFAFA", font=("Segoe UI", 9),
                            cursor="hand2",
-                           command=lambda v=val: self._pet.set_reminder(v),
-                           activebackground="#FAFAFA").pack(
-                           anchor="w", padx=16, pady=2)
+                           command=lambda v=val: self._on_focus_change(v),
+                           activebackground="#FAFAFA").grid(
+                           row=i // 3, column=i % 3, sticky="w",
+                           padx=(0, 22), pady=2)
 
+        # ── Phong cách nhắc ───────────────────────────────────────────────
         self._section(f, "Reminder Style")
-        self._remind_style_var = tk.StringVar(value="friendly")
-        for style, desc in [("friendly", "Warm and encouraging"),
-                             ("stern",   "More direct, no-nonsense"),
-                             ("silly",   "Funny and weird")]:
-            row = tk.Frame(f, bg="#FAFAFA"); row.pack(fill="x", padx=16, pady=1)
-            tk.Radiobutton(row, text=style.capitalize(),
+        self._remind_style_var = tk.StringVar(value=self._pet.reminder.style)
+        srow = tk.Frame(f, bg="#FAFAFA"); srow.pack(fill="x", padx=16)
+        for style, desc in [("friendly", "warm"), ("stern", "strict"), ("silly", "goofy")]:
+            tk.Radiobutton(srow, text=f"{style.capitalize()} ({desc})",
                            variable=self._remind_style_var, value=style,
                            bg="#FAFAFA", font=("Segoe UI", 9),
-                           cursor="hand2").pack(side="left")
-            tk.Label(row, text=f"— {desc}",
-                     bg="#FAFAFA", fg="#666677",
-                     font=("Segoe UI", 8)).pack(side="left")
+                           cursor="hand2",
+                           command=self._on_style_change,
+                           activebackground="#FAFAFA").pack(side="left", padx=(0, 10))
+
+        # ── Trạng thái + Focus streak ─────────────────────────────────────
+        self._section(f, "🍅 Focus streak")
+        self._pomo_streak_lbl = tk.Label(f, text="", bg="#FAFAFA", fg="#222233",
+                                         font=("Segoe UI", 9, "bold"), anchor="w")
+        self._pomo_streak_lbl.pack(fill="x", padx=16)
+        self._pomo_status_lbl = tk.Label(f, text="", bg="#FAFAFA", fg="#666677",
+                                         font=("Segoe UI", 8), anchor="w",
+                                         justify="left", wraplength=400)
+        self._pomo_status_lbl.pack(fill="x", padx=16)
+
+        # ── Báo cáo năng suất 7 ngày ──────────────────────────────────────
+        self._section(f, "📊 Weekly productivity report")
+        self._report_canvas = tk.Canvas(f, width=420, height=110, bg="#FAFAFA",
+                                        highlightthickness=0)
+        self._report_canvas.pack(padx=16)
+        self._report_summary = tk.Label(f, text="", bg="#FAFAFA", fg="#444455",
+                                        font=("Segoe UI", 8), anchor="w",
+                                        justify="left", wraplength=420)
+        self._report_summary.pack(fill="x", padx=16, pady=(2, 0))
+        tk.Button(f, text="↻ Refresh", command=self._refresh_pomodoro,
+                  bg="#FAFAFA", fg="#666677", font=("Segoe UI", 8),
+                  relief="flat", cursor="hand2").pack(anchor="e", padx=16)
+        self._refresh_pomodoro()
+
+    def _on_focus_change(self, minutes):
+        self._pet.set_reminder(minutes)
+        self._refresh_pomodoro()
+
+    def _on_style_change(self):
+        style = self._remind_style_var.get()
+        self._pet.reminder.set_style(style)
+        try:                                   # nhớ lựa chọn cho lần chạy sau
+            cfg = config_manager.load()
+            cfg["reminder_style"] = style
+            config_manager.save(cfg)
+        except Exception:
+            pass
+
+    def _refresh_pomodoro(self):
+        """Cập nhật trạng thái hiện tại, focus streak và biểu đồ 7 ngày."""
+        try:
+            st    = self._pet.reminder.status()
+            n     = self._pet.screen_time.pomodoros_today
+            self._pomo_streak_lbl.config(
+                text=f"Today: {n} Pomodoro{'s' if n != 1 else ''} completed")
+            if not st["enabled"]:
+                status = "Pomodoro is off. Pick a focus length above to start."
+            elif st["state"] == "focus":
+                status = (f"Focusing: {st['focus_min']}/{st['focus_goal']} min of "
+                          f"active computer time. Break starts when it's full.")
+            else:
+                status = (f"BREAK: rested {st['rest_min']}/{st['break_goal']} min. "
+                          f"Step away from the keyboard!")
+            self._pomo_status_lbl.config(text=status)
+            self._draw_weekly_report()
+        except Exception as e:                 # không để lỗi thống kê làm hỏng Settings
+            self._pomo_status_lbl.config(text=f"(stats unavailable: {e})")
+
+    def _draw_weekly_report(self):
+        cv   = self._report_canvas
+        cv.delete("all")
+        days = self._pet.screen_time.weekly_report()
+        tot  = self._pet.screen_time.weekly_totals()
+        W, base, top = 420, 78, 14
+        col  = W // 7
+        peak = max([d["focus_min"] for d in days] + [1.0])
+        for i, d in enumerate(days):
+            cx = i * col + col // 2
+            h  = int((base - top) * d["focus_min"] / peak) if d["focus_min"] else 0
+            is_today = (i == len(days) - 1)
+            if h:
+                cv.create_rectangle(cx - 16, base - h, cx + 16, base,
+                                    fill="#2D2D3A" if is_today else "#E5533D",
+                                    outline="")
+                cv.create_text(cx, base - h - 8, text=str(d["count"]),
+                               font=("Segoe UI", 8, "bold"), fill="#222233")
+            else:
+                cv.create_line(cx - 16, base, cx + 16, base, fill="#CCCCDD")
+            cv.create_text(cx, base + 12, text=d["day"],
+                           font=("Segoe UI", 8, "bold" if is_today else "normal"),
+                           fill="#222233")
+            cv.create_text(cx, base + 25, text=d["date"],
+                           font=("Segoe UI", 7), fill="#888899")
+        if tot["pomodoros"] == 0:
+            cv.create_text(W // 2, 38, text="No Pomodoro yet this week",
+                           font=("Segoe UI", 9), fill="#888899")
+        hours = tot["focus_min"] / 60.0
+        self._report_summary.config(text=(
+            f"7 days: {tot['pomodoros']} 🍅  •  {hours:.1f}h focus  •  "
+            f"avg {tot['avg']:.1f}/day  •  best day: {tot['best_day']}  •  "
+            f"breaks skipped: {tot['skipped']}   (bar = focus time, number = Pomodoros)"))
 
     # ── Memory ────────────────────────────────────────────────────────────
 
@@ -352,8 +445,7 @@ class SettingsWindow:
         if not self._mem_dash or not hasattr(self._mem_dash, "_win"):
             self._mem_dash = MemoryDashboard(
                 self._pet.window.root,
-                self._pet.memory,
-                self._pet.dreams)   # ← add this
+                self._pet.memory)
         self._mem_dash.open()
 
     # ── Achievements ──────────────────────────────────────────────────────

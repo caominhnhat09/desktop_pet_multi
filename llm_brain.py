@@ -737,7 +737,18 @@ class LLMBrain:
         low    = text.lower().strip()
         result = {"action": "unknown", "target": "", "params": {}, "raw": text}
 
-        if any(w in low for w in ["play ", "pause", "house", "stop", "resume", "skip", "next track",
+        # "close ..." không còn là lệnh nữa (trước đây bị hiểu nhầm thành MỞ app/web).
+        # Trả về unknown để pet chỉ trò chuyện, không làm gì với ứng dụng.
+        if re.match(r"^\s*(?:please\s+)?close\b", low):
+            return result
+
+        # Hủy hẹn giờ. Phải xét TRƯỚC nhánh nhạc vì "stop" đang được dùng cho pause.
+        if "timer" in low and re.search(r"\b(cancel|stop|clear|delete|remove)\b", low):
+            result["action"] = "timer"
+            result["params"]["cancel"] = True
+            return result
+
+        if any(w in low for w in ["play ", "pause", "house", "stop", "resume", "skip", "next",
                                    "stop music", "mute", "volume"]):
             result["action"] = "music"
             if "play " in low:
@@ -751,17 +762,18 @@ class LLMBrain:
             elif any(w in low for w in ["skip", "next"]):
                 result["target"] = "next"
 
-        elif any(w in low for w in ["open ", "launch ", "start ", "close "]):
+        elif any(w in low for w in ["open ", "launch ", "start "]):
             result["action"] = "app"
-            for t in ["open ", "launch ", "start ", "close "]:
+            for t in ["open ", "launch ", "start "]:
                 if t in low:
                     result["target"] = low.split(t, 1)[1].strip()
                     break
 
         elif any(w in low for w in ["timer", "remind", "minutes", "alarm"]):
             result["action"] = "timer"
-            nums = re.findall(r'\d+', low)
-            result["params"]["minutes"] = int(nums[0]) if nums else 5
+            seconds = _parse_duration_seconds(low)
+            result["params"]["seconds"] = seconds
+            result["params"]["minutes"] = round(seconds / 60, 2)   # giữ tương thích
 
         elif any(w in low for w in ["search", "look up", "google", "find"]):
             result["action"] = "search"
@@ -793,9 +805,24 @@ class LLMBrain:
 
 # ── Intent classifier (used by fallback + parser) ─────────────────────────
 
+def _parse_duration_seconds(low: str) -> int:
+    """'5 minutes' / '1 hour' / '30 seconds' / 'an hour' -> số giây. Mặc định 5 phút."""
+    unit_sec = {"h": 3600, "m": 60, "s": 1}
+    m = re.search(
+        r"(\d+(?:\.\d+)?|an?|one)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b", low)
+    if m:
+        qty = m.group(1)
+        n   = 1.0 if qty in ("a", "an", "one") else float(qty)
+        seconds = n * unit_sec[m.group(2)[0]]
+    else:
+        nums = re.findall(r"\d+", low)          # "timer 3" -> 3 phút như trước
+        seconds = (int(nums[0]) if nums else 5) * 60
+    return int(min(max(seconds, 5), 24 * 3600))   # 5 giây .. 24 giờ
+
+
 INTENT_PATTERNS = {
-    "command":  ["play ", "open ", "pause", "skip", "mute", "volume",
-                 "search", "remind", "timer", "close", "stop", "find"],
+    "command":  ["play ", "open ", "pause", "skip", "next", "mute", "volume",
+                 "search", "remind", "timer", "stop", "find"],
     "question": ["what", "who", "where", "when", "why", "how",
                  "is it", "can you", "do you", "?"],
     "emotion":  ["good boy", "good dog", "cute", "love you",

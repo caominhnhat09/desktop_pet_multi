@@ -74,7 +74,7 @@ def _build_icon(pet, img):
 
     def quit_app(i, it):
         i.stop()
-        pet.window.root.after(0, pet.window.root.destroy)
+        pet.window.root.after(0, pet.quit_app)
 
     # ── Accessory submenu ────────────────────────────────────────────────
     unlocked  = unlocked_accessories(pet.state.level)

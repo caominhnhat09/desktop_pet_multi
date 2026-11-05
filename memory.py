@@ -37,6 +37,7 @@ class PetMemory:
             "facts":          {},    # {key: value} e.g. {"user_name": "Alex"}
             "app_time":       {},    # {app_name: minutes}
             "peak_hours":     [],    # list of ints (hours with most activity)
+            "hour_counts":    {},    # {"21": phút hoạt động tích lũy qua MỌI phiên}
             "late_nights":    0,
             "total_sessions": 0,
             "emotions":       [],    # [{emotion, cause, ts}] last 20
@@ -47,6 +48,10 @@ class PetMemory:
                 with open(MEMORY_PATH) as f:
                     saved = json.load(f)
                 defaults.update(saved)
+                # Bản cũ tính peak_hours chỉ từ phiên hiện tại rồi ghi đè -> bỏ giá trị đó,
+                # chờ dữ liệu tích lũy thật.
+                if "hour_counts" not in saved:
+                    defaults["peak_hours"] = []
             except Exception:
                 pass
         defaults["total_sessions"] = defaults.get("total_sessions", 0) + 1
@@ -54,8 +59,11 @@ class PetMemory:
 
     def save(self):
         try:
+            data = dict(self._data)
+            data["app_time"] = {k: round(v, 3) for k, v in
+                                self._data.get("app_time", {}).items()}
             with open(MEMORY_PATH, "w") as f:
-                json.dump(self._data, f, indent=2)
+                json.dump(data, f, indent=2)
         except Exception:
             pass
 
@@ -98,12 +106,33 @@ class PetMemory:
         (r"my (?:fav|favorite) (.+?) is (.+?)[\.\!]", "favorite"),
     ]
 
+    # "I'm tired" / "I am back" không phải là tên người dùng
+    _NOT_A_NAME = {
+        "a", "an", "the", "not", "so", "just", "very", "really", "going", "back",
+        "here", "there", "ready", "sorry", "sure", "fine", "good", "great", "ok",
+        "okay", "tired", "hungry", "sad", "happy", "bored", "busy", "angry",
+        "working", "coding", "learning", "trying", "still", "also", "too", "done",
+        "late", "early", "new", "in", "at", "on", "from", "with", "then", "now",
+        "again", "today", "thinking", "looking", "waiting", "doing", "feeling",
+    }
+
     def _extract_facts(self, text: str):
         low = text.lower().strip()
         for pattern, key in self.FACT_PATTERNS:
             m = re.search(pattern, low)
             if m:
                 value = m.group(1).strip()
+                if value in ("a", "an", "the"):      # vd "I am a developer" -> job="a"
+                    continue
+                if key == "user_name" and (value in self._NOT_A_NAME
+                                           or value.isdigit()):
+                    continue
+                if key == "favorite" and m.lastindex and m.lastindex >= 2:
+                    # "my favorite color is blue": lưu favorite_color = blue
+                    # (bản cũ chỉ lưu "color" và làm mất giá trị "blue")
+                    cat   = re.sub(r"\W+", "_", value)[:20].strip("_") or "thing"
+                    key   = f"favorite_{cat}"
+                    value = m.group(2).strip()
                 if len(value) < 60:  # sanity check
                     self._data["facts"][key] = value
 
@@ -114,24 +143,41 @@ class PetMemory:
             return
         name = app_name.replace(".exe", "").lower()
         minutes = self._data["app_time"].get(name, 0) + seconds / 60
-        self._data["app_time"][name] = round(minutes, 1)
+        # Bản cũ làm tròn 1 chữ số thập phân MỖI TICK (cộng ~0.0003 phút rồi round(..,1))
+        # nên giá trị luôn về 0.0 -> tab Apps trống, "Top apps" xếp ngẫu nhiên.
+        # Giờ giữ nguyên độ chính xác trong RAM, chỉ làm tròn khi ghi file (xem save()).
+        self._data["app_time"][name] = minutes
 
     def top_apps(self, n: int = 3) -> list:
-        apps = sorted(self._data["app_time"].items(),
+        apps = sorted(((k, v) for k, v in self._data["app_time"].items() if v > 0),
                       key=lambda x: x[1], reverse=True)
         return [a[0] for a in apps[:n]]
 
     # ── Hour tracking ─────────────────────────────────────────────────────
 
-    def record_interaction(self):
+    MIN_SAMPLES_FOR_PEAK = 30      # cần ≥30 phút hoạt động mới kết luận "giờ cao điểm"
+
+    def _bump_hour(self):
         hour = datetime.datetime.now().hour
-        self._hour_counts[hour] += 1
-        # Update peak hours (top 3)
-        sorted_hours = sorted(self._hour_counts.items(),
-                               key=lambda x: x[1], reverse=True)
-        self._data["peak_hours"] = [h for h, _ in sorted_hours[:3]]
+        counts = self._data.setdefault("hour_counts", {})
+        counts[str(hour)] = counts.get(str(hour), 0) + 1
+        total = sum(counts.values())
+        if total >= self.MIN_SAMPLES_FOR_PEAK:
+            top = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            self._data["peak_hours"] = [int(h) for h, _ in top]
+        return hour
+
+    def record_interaction(self):
+        """Gọi khi có tương tác (LLM trả lời, gửi lệnh)."""
+        hour = self._bump_hour()
         if hour >= 23 or hour <= 3:
             self._data["late_nights"] = self._data.get("late_nights", 0) + 1
+
+    def record_active_minute(self):
+        """Gọi mỗi phút khi người dùng THỰC SỰ đang dùng máy (không AFK).
+        Bản cũ chỉ đếm trong RAM của phiên hiện tại và ghi đè giá trị đã lưu,
+        nên mở app lúc 21h là 'giờ hoạt động nhiều nhất' = 21:00 ngay."""
+        self._bump_hour()
 
     # ── Emotion logging ───────────────────────────────────────────────────
 
@@ -162,6 +208,23 @@ class PetMemory:
             parts.append(f"They work at {facts['workplace']}.")
         if facts.get("likes"):
             parts.append(f"They like {facts['likes']}.")
+        if facts.get("location"):
+            parts.append(f"They live in {facts['location']}.")
+        if facts.get("age"):
+            parts.append(f"They are {facts['age']} years old.")
+        # Mọi fact còn lại (kể cả fact thêm tay trong Dashboard) — tối đa 6 mục,
+        # để bảng Facts thật sự ảnh hưởng tới câu trả lời của AI.
+        known = {"user_name", "job", "workplace", "likes", "location", "age"}
+        extra = []
+        for k, v in facts.items():
+            if k in known or not v:
+                continue
+            if k.startswith("favorite_"):
+                extra.append(f"their favorite {k[9:].replace('_', ' ')} is {str(v)[:40]}")
+            else:
+                extra.append(f"{k.replace('_', ' ')}: {str(v)[:40]}")
+        if extra:
+            parts.append("Also: " + "; ".join(extra[:6]) + ".")
 
         # Usage patterns
         top = self.top_apps(2)

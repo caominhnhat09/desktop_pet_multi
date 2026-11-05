@@ -36,7 +36,8 @@ _DEFAULTS = {
     "accessory":        None,
     "last_x":           -1,       # -1 = auto-position
     "last_y":           -1,
-    "reminder_min":     45,
+    "reminder_min":     45,       # độ dài FOCUS của Pomodoro (0 = tắt)
+    "reminder_style":   "friendly",
     "afk_sleep_sec":    120,
     "hud_enabled":      True,
     "wake_words":       ["hey buddy", "okay dog", "hey dog"],

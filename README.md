@@ -54,8 +54,8 @@ Compact 130×42px pill above the pet showing mood emoji, pet type emoji, level, 
 ### 🎵 Spotify Integration
 The pet reacts to music. Dance animations when a banger drops. Notifies you when tracks change. Reacts with personality — the dragon nods approvingly, the cat's tail sways against its will.
 
-### 🌤️ Weather Awareness
-Detects your local weather and reacts. The pet comments on rain, heat, and fog in character. In Delhi at 37°C, the dragon approves of the heat.
+### 🍅 Pomodoro Guardian
+Pick a focus length (20–90 min) in Settings → Reminders. The pet counts the time you are actually using the PC, then insists on a 10-minute break — nagging more firmly every ~90 s (friendly / stern / silly, flavoured by the pet's personality) until you step away. Finished breaks build your daily Focus streak; Settings shows a 7-day productivity report. Voice timers (`set timer 5 minutes`) ring with a sound and repeat until you click the pet.
 
 ### 🌙 Day/Night Awareness
 Night tint after 9pm. Different idle animations. Sleepier responses. The pet knows when it's 3am and that you probably shouldn't be awake.
@@ -165,37 +165,13 @@ main.py              — DesktopPet class, main loop, event wiring
 ├── achievement_ui.py— trophy wall UI
 ├── screen_time.py   — streak tracking, daily/weekly stats
 ├── day_night.py     — time awareness, app watching, window detection
-├── weather.py       — local weather via wttr.in
+├── alert_sound.py   — reminder/timer sounds (winsound, no audio files)
 ├── seasonal.py      — holiday greetings, seasonal accessories
 └── config_manager.py— persistent config, works in both source + exe
 ```
 
 ---
 
-## Roadmap
-
-### v1.1 — Pet Evolution
-- Level 5 → Form 2 (golden retriever / fire dragon / lynx)
-- Level 10 → Form 3 (wolf / ice dragon / panther)  
-- Level 20 → Mythic form with unique animations
-
-### v1.2 — Dream Journal
-- When pet sleeps (AFK > 10min), LLM generates a dream from your memories
-- Shown as speech bubble on wake
-- All dreams saved and browsable
-
-### v1.3 — Productivity Guardian
-- Tracks focused work vs distraction time
-- Pomodoro mode with pet as accountability partner
-- Weekly productivity report
-
-### v2.0 — Multiplayer
-- LAN discovery — pets on the same network find each other
-- Visit, gift, and challenge to mini-games
-
-See [PRODUCT_ROADMAP.md](PRODUCT_ROADMAP.md) for the full vision.
-
----
 
 ## Contributing
 
