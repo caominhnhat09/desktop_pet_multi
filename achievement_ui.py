@@ -146,11 +146,29 @@ class AchievementUI:
 
         self._canvas.bind("<Configure>", self._on_canvas_resize)
         self._grid_frame.bind("<Configure>", self._on_frame_resize)
-        self._canvas.bind_all("<MouseWheel>",
-            lambda e: self._canvas.yview_scroll(
-                int(-1*(e.delta/120)), "units"))
+        # bind_all là TOÀN CỤC: bản cũ gắn một lambda gọi thẳng vào canvas nên khi cửa
+        # sổ đã đóng, mỗi lần lăn chuột ở bất kỳ đâu đều gọi vào canvas đã chết ->
+        # TclError "invalid command name .!toplevel36.!frame6.!canvas".
+        # Giờ: handler tự kiểm tra canvas còn sống, và được gỡ khi cửa sổ đóng.
+        self._canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        win.bind("<Destroy>", self._on_win_destroy, add="+")
 
         self._populate_grid()
+
+    def _on_mousewheel(self, e):
+        try:
+            if self._canvas.winfo_exists():
+                self._canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        except tk.TclError:
+            pass                       # canvas vừa bị huỷ giữa chừng
+
+    def _on_win_destroy(self, e):
+        # <Destroy> cũng được phát cho từng widget con nên chỉ xử lý khi là cửa sổ chính
+        if e.widget is self._win:
+            try:
+                self._win.unbind_all("<MouseWheel>")
+            except Exception:
+                pass
 
     def _on_canvas_resize(self, e):
         self._canvas.itemconfig(self._canvas_win, width=e.width)

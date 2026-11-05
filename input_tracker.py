@@ -77,6 +77,18 @@ class InputTracker:
                 self._taskbar_top = top
                 print(f"[tracker] taskbar detected at y={top}")
                 return top
+            elif top >= screen_h and abd.rc.bottom > screen_h:
+                # Màn hình có tỉ lệ hiển thị (vd 250% trên 4K): Windows trả toạ độ VẬT LÝ
+                # (vd 2040) còn Tk dùng toạ độ LOGIC (vd 864) nên bị coi là "sai".
+                # Quy đổi bằng tỉ lệ rc.bottom / screen_h.
+                scale = abd.rc.bottom / float(screen_h)
+                top_l = int(round(top / scale))
+                if screen_h * 0.5 < top_l < screen_h:
+                    self._taskbar_top = top_l
+                    print(f"[tracker] taskbar detected at y={top_l} "
+                          f"(display scaling x{scale:.2f}, raw y={top})")
+                    return top_l
+                print(f"[tracker] taskbar y={top} looks wrong, using fallback {fallback}")
             else:
                 print(f"[tracker] taskbar y={top} looks wrong, using fallback {fallback}")
         except Exception as e:

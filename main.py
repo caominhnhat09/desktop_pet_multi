@@ -31,7 +31,6 @@ from llm_brain        import LLMBrain
 from voice            import VoiceListener
 from command_handler  import CommandHandler
 from accessories      import apply_accessory, unlocked_accessories, ACCESSORIES
-from google_workspace import GoogleWorkspace
 import alert_sound
 from notifications    import NotificationManager
 from hud              import PetHUD
@@ -110,7 +109,6 @@ SAVE_INTERVAL = 60.0
 CD_APP_SPEECH  = 90
 CD_IDLE_SPEECH = 40
 CD_MEET_SPEECH = 180
-CD_WORKSPACE   = 300
 
 EMOTION_ANIM = {
     "excited":   "happy",
@@ -144,7 +142,6 @@ class DesktopPet:
         self.reminder  = ReminderSystem(self, reminder_min)
         self.brain     = LLMBrain(self.state, self.app_watch)
         self.cmd       = CommandHandler(self)
-        self.workspace = GoogleWorkspace()
         self.notify    = NotificationManager(lambda: self.window.root)
 
         from voice import PET_WAKE_WORDS
@@ -187,6 +184,8 @@ class DesktopPet:
         self._timers     = []          # threading.Timer đang chờ
         self._timer_ack  = False       # bấm vào pet = tắt chuông hẹn giờ
         self._quitting   = False
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_done = False
         self._t_last_tick = time.monotonic()
 
         # ── Clipboard ─────────────────────────────────────────────────────
@@ -225,13 +224,11 @@ class DesktopPet:
         self._t_save              = 0.0
         self._t_llm_idle          = 0.0
         self._t_llm_idle_interval = random.uniform(60, 90)  # fixed interval, not re-rolled every tick
-        self._t_workspace         = 0.0
         self._t_screen_time       = 0.0   # throttle screen_time.tick() to once/min
         self._last_app_cat        = "other"
         self._last_spotify        = False
         self._last_meeting        = False
         self._afk_sleeping        = False
-        self._last_unread         = 0
         self._last_track          = ""
 
         # ── Position ──────────────────────────────────────────────────────
@@ -391,13 +388,20 @@ class DesktopPet:
                 pass
 
     def quit_app(self):
-        """Thoát an toàn. KHÔNG destroy() ngay: vòng tick/bong bóng đang chạy sẽ gọi
-        vào cửa sổ đã chết -> TclError 'NULL main window'. Thay vào đó: báo cho tick
-        dừng, thoát mainloop; run() lưu dữ liệu rồi mới destroy."""
+        """Thoát NGAY khi bấm Quit.
+
+        Trước đây quit_app chỉ gọi root.quit() rồi chờ mainloop() kết thúc; nếu vòng
+        lặp Tk còn đang chờ một sự kiện (và tick đã ngừng hẹn lịch) thì phải click /
+        bấm phím mới có sự kiện để nó thoát. Giờ không phụ thuộc mainloop nữa:
+        ẩn pet -> lưu dữ liệu -> dừng luồng nền -> tắt hẳn tiến trình.
+        Chốt chặn: nếu bước dọn dẹp bị treo, 3 giây sau tiến trình vẫn bị tắt."""
         if self._quitting:
             return
         self._quitting = True
         self._timer_ack = True
+        guard = threading.Timer(3.0, self._hard_exit)
+        guard.daemon = True
+        guard.start()
         for t in self._timers:
             t.cancel()
         try:
@@ -405,9 +409,64 @@ class DesktopPet:
         except Exception:
             pass
         try:
-            self.window.root.quit()
+            self.window.root.withdraw()        # pet biến mất ngay lập tức
         except Exception:
             pass
+        self._shutdown()
+        self._hard_exit()
+
+    def _shutdown(self):
+        """Lưu dữ liệu và dừng các luồng nền. Chỉ chạy 1 lần (gọi lại là bỏ qua)."""
+        with self._shutdown_lock:
+            if self._shutdown_done:
+                return
+            self._shutdown_done = True
+
+        def _safe(fn):
+            try:
+                fn()
+            except Exception as e:
+                print(f"[shutdown] {getattr(fn, '__qualname__', fn)}: {e}")
+
+        _safe(self.state.save)
+        _safe(self.memory.save)
+        _safe(self.screen_time.save)
+        _safe(self.achievements.save)
+        _safe(lambda: self.achievements.on_session_end(
+            self.memory.session_duration_minutes()))
+        _safe(lambda: config_manager.save({
+            "pet":           self.pet_type,
+            "speed":         self.anim_speed,
+            "color":         next((k for k, v in TINTS.items()
+                                   if v == self._color_tint), "default"),
+            "accessory":     self._active_accessory,
+            "last_x":        int(self.x),
+            "last_y":        int(self.y),
+            "reminder_min":  self.reminder._interval // 60,
+            "reminder_style": self.reminder.style,
+            "afk_sleep_sec": self._afk_sleep_sec,
+            "hud_enabled":   self.hud_enabled,
+            "follow_speed":  self._follow_speed,
+        }))
+        _safe(self.voice.stop)
+        _safe(self.clipboard.stop)
+        # Gỡ biểu tượng khay hệ thống: chạy ở luồng riêng, chờ tối đa 1 giây để
+        # không bao giờ bị treo ở đây.
+        t = threading.Thread(target=lambda: _safe(self._tray.stop), daemon=True)
+        t.start()
+        t.join(1.0)
+        time.sleep(0.2)                        # cho khay kịp xoá biểu tượng
+
+    @staticmethod
+    def _hard_exit():
+        """Tắt tiến trình ngay, không chờ luồng nền / dọn dẹp của Python
+        (dữ liệu đã được lưu ở _shutdown)."""
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(0)
 
     def _on_double_click(self, e):
         if not self._dragging:
@@ -689,7 +748,6 @@ class DesktopPet:
         bar    = "█" * int(s.xp / xp_needed * 10) + "░" * (10 - int(s.xp / xp_needed * 10))
         hbar   = "█" * int(s.hunger / 10)          + "░" * (10 - int(s.hunger / 10))
         brain  = f"Ollama: {self.brain._model}" if self.brain.is_available else "Built-in"
-        ws     = "Connected ✅" if self.workspace.is_available else "Not configured"
         acc    = self._active_accessory or "none"
         sess   = self.memory.session_summary()
         top    = ", ".join(self.memory.top_apps(3)) or "none tracked"
@@ -725,7 +783,6 @@ class DesktopPet:
             f"Top apps: {top}",
             "",
             f"LLM: {brain}",
-            f"Workspace: {ws}",
         ]
         for line in [l for l in lines if l is not None]:
             bold = line.startswith("🐾")
@@ -898,27 +955,6 @@ class DesktopPet:
                                              self._on_llm_response, cat)
                     self._t_app_speech = now
             self._last_app_cat = cat
-
-        if self.workspace.is_available and now - self._t_workspace > CD_WORKSPACE:
-            unread = self.workspace.get_unread_count()
-            ev     = self.workspace.get_next_event()
-            if unread > self._last_unread:
-                diff    = unread - self._last_unread
-                senders = self.workspace.get_unread_senders()
-                who     = f" from {senders[0]}" if senders else ""
-                self.brain.respond_async(
-                    f"There are {diff} new unread emails{who}",
-                    self._on_llm_response, "idle")
-                self._last_unread = unread
-                self.particles.emit_exclaim()
-                self.notify.email(diff, senders[0] if senders else "")
-            if ev and ev.get("mins_away", 9999) <= 10:
-                self.brain.respond_async(
-                    f"Meeting '{ev['title']}' starts in {ev['mins_away']} minutes!",
-                    self._on_llm_response, "meeting")
-                self.particles.emit_exclaim()
-                self.notify.meeting(ev["title"], ev["mins_away"])
-            self._t_workspace = now
 
         # ── Idle LLM quip — interval decided ONCE, not re-rolled every tick ──
         if state == State.IDLE and now - self._t_llm_idle > self._t_llm_idle_interval:
@@ -1124,34 +1160,10 @@ class DesktopPet:
         tick()
         self.window.root.mainloop()
 
-        # Shutdown
-        self.state.save()
-        self.memory.save()
-        self.screen_time.save()
-        self.achievements.save()
-        self.achievements.on_session_end(self.memory.session_duration_minutes())
-        config_manager.save({
-            "pet":           self.pet_type,
-            "speed":         self.anim_speed,
-            "color":         next((k for k, v in TINTS.items()
-                                   if v == self._color_tint), "default"),
-            "accessory":     self._active_accessory,
-            "last_x":        int(self.x),
-            "last_y":        int(self.y),
-            "reminder_min":  self.reminder._interval // 60,
-            "reminder_style": self.reminder.style,
-            "afk_sleep_sec": self._afk_sleep_sec,
-            "hud_enabled":   self.hud_enabled,
-            "follow_speed":  self._follow_speed,
-        })
-        self.voice.stop()
-        self.clipboard.stop()
-        self.workspace.stop()
-        self._tray.stop()
-        try:                           # đóng cửa sổ SAU khi mainloop đã dừng
-            self.window.root.destroy()
-        except Exception:
-            pass
+        # mainloop kết thúc theo đường khác (không qua quit_app): vẫn lưu và thoát gọn
+        self._quitting = True
+        self._shutdown()
+        self._hard_exit()
 
 
 def main():

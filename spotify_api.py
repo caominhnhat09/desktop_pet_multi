@@ -63,9 +63,10 @@ class SpotifyAPI:
 
         if self._client_id and self._client_secret:
             threading.Thread(target=self._init, daemon=True).start()
-        else:
-            print("[spotify] No credentials in config.json — using media keys fallback.")
-            print("          See spotify_api.py docstring for setup.")
+        elif os.environ.get("PET_VERBOSE"):
+            # Tính năng TÙY CHỌN: không có Spotify API thì dùng phím media, không phải lỗi.
+            print("[spotify] optional: no credentials in config.json, using media keys "
+                  "(see spotify_api.py docstring to enable the API).")
 
     def _init(self):
         if self._load_tokens():

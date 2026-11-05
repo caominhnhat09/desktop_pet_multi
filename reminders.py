@@ -9,7 +9,9 @@ Cách hoạt động (chọn "Focus length" trong Settings → Reminders):
   BREAK  : 10 phút. Pet nhắc liên tục (mỗi ~90 giây, mỗi lần một mức gắt hơn)
            cho tới khi bạn rời máy. Thời gian rời máy được cộng dồn;
            đủ 10 phút = hoàn thành 1 Pomodoro (🍅) → tính "Focus streak" hôm nay.
-           Quá 30 phút mà chưa nghỉ đủ → bỏ vòng này (tính là "bỏ qua giờ nghỉ").
+           Chỉ khi bạn NGỒI MÁY phớt lờ tổng cộng 30 phút trong giờ nghỉ thì mới bỏ vòng
+           này (tính là "bỏ qua giờ nghỉ"). Thời gian nghỉ thật không bao giờ bị hủy
+           giữa chừng, và được cộng dồn qua nhiều lần rời máy.
 
 Giọng điệu theo "Reminder Style" (friendly / stern / silly) và tính cách của pet.
 Thống kê lưu trong screen_time.json (xem ScreenTimeTracker.record_pomodoro).
@@ -31,7 +33,7 @@ AWAY_IDLE_SEC   = 30        # không thao tác ≥30s => coi là đã rời máy
 ACTIVE_IDLE_SEC = 60        # thao tác trong 60s gần nhất => đang làm việc
 RESET_IDLE_SEC  = 180       # tự nghỉ ≥3 phút khi đang FOCUS => đếm lại giờ làm
 NAG_EVERY_SEC   = 90        # khoảng cách giữa 2 lần nhắc khi vẫn ngồi máy
-BREAK_GIVEUP    = 30 * 60   # quá 30 phút mà chưa nghỉ đủ => bỏ vòng này
+BREAK_GIVEUP    = 30 * 60   # tổng 30 phút NGỒI MÁY (phớt lờ) trong giờ nghỉ => bỏ vòng này
 POLL_SEC        = 1.0       # xử lý 1 lần/giây (check() được gọi mỗi tick ~16ms)
 
 # Placeholder: {n}=phút làm việc  {b}=phút nghỉ  {left}=phút nghỉ còn thiếu
@@ -139,7 +141,8 @@ class ReminderSystem:
     def _reset_cycle(self):
         self._state        = "focus"          # "focus" | "break"
         self._active_sec   = 0.0              # thời gian làm việc đã tích lũy
-        self._rest_sec     = 0.0              # thời gian rời máy trong giờ nghỉ
+        self._rest_sec     = 0.0              # thời gian rời máy trong giờ nghỉ (cộng dồn)
+        self._ignored_sec  = 0.0              # thời gian vẫn ngồi máy trong giờ nghỉ
         self._break_start  = 0.0
         self._last_nag     = 0.0
         self._nag_count    = 0
@@ -209,25 +212,31 @@ class ReminderSystem:
         self._last_nag    = now
         self._nag_count   = 0
         self._rest_sec    = 0.0
+        self._ignored_sec = 0.0
         msg = self._compose("start")
         self._alert("break", msg)
         return msg
 
     def _tick_break(self, dt, idle, now):
         if idle >= AWAY_IDLE_SEC:                  # đang nghỉ thật
-            self._rest_sec += dt
+            self._rest_sec += dt                   # cộng dồn, KHÔNG bị hủy giữa chừng
             if self._rest_sec >= BREAK_MINUTES * 60:
                 return self._finish_pomodoro()
-        elif now - self._last_nag >= NAG_EVERY_SEC:  # vẫn ngồi máy => nhắc tiếp
+            return None
+
+        # Vẫn ngồi máy: tính thời gian phớt lờ rồi nhắc tiếp.
+        # (Bản trước hủy giờ nghỉ khi đủ 30 phút KỂ TỪ LÚC BẮT ĐẦU NGHỈ, kể cả khi bạn
+        #  đang nghỉ thật => mất phần nghỉ đã làm.)
+        self._ignored_sec += dt
+        if self._ignored_sec >= BREAK_GIVEUP:
+            return self._give_up()
+        if now - self._last_nag >= NAG_EVERY_SEC:
             self._last_nag = now
             self._nag_count += 1
             msg = self._compose("nag")
             if self._nag_count >= 2:
                 self._alert("nag", None)
             return msg
-
-        if now - self._break_start >= BREAK_GIVEUP:  # bỏ qua giờ nghỉ
-            return self._give_up()
         return None
 
     def _finish_pomodoro(self):
@@ -237,6 +246,7 @@ class ReminderSystem:
         except Exception:
             pass
         self._state, self._active_sec, self._rest_sec = "focus", 0.0, 0.0
+        self._ignored_sec = 0.0
         self._pending_msg = self._compose("done")
         self._alert("done", None)
         try:
@@ -251,6 +261,7 @@ class ReminderSystem:
         except Exception:
             pass
         self._state, self._active_sec, self._rest_sec = "focus", 0.0, 0.0
+        self._ignored_sec = 0.0
         return self._compose("giveup")
 
     # ── Lời thoại ────────────────────────────────────────────────────────
