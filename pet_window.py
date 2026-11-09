@@ -89,6 +89,43 @@ class PetWindow:
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self._img_ref)
 
+    # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+    _SWP_FLAGS = 0x0001 | 0x0002 | 0x0010 | 0x0040
+
+    def keep_on_top(self):
+        """Đặt lại "luôn ở trên cùng" mà KHÔNG cướp focus.
+
+        Tk chỉ đặt -topmost một lần lúc tạo cửa sổ. Windows có thể đẩy cửa sổ xuống
+        dưới sau khi khoá/mở khoá màn hình, đổi desktop ảo, app toàn màn hình, khi
+        taskbar/Start giành quyền... khiến pet "biến mất" dù chương trình vẫn chạy.
+        Trả về chuỗi lý do nếu phải sửa (để main ghi log), ngược lại trả về None."""
+        if sys.platform != "win32":
+            try:
+                self.root.wm_attributes("-topmost", True)
+            except Exception:
+                pass
+            return None
+        try:
+            user32 = ctypes.windll.user32
+            hwnd   = user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+            reason = None
+            if not user32.IsWindowVisible(hwnd):
+                reason = "pet window was hidden"
+            elif not (user32.GetWindowLongW(hwnd, -20) & 0x00000008):   # WS_EX_TOPMOST
+                reason = "pet window lost always-on-top"
+            # argtypes bắt buộc: nếu không, HWND_TOPMOST (-1) bị cắt còn 32-bit trên
+            # Windows 64-bit và lệnh thất bại âm thầm.
+            user32.SetWindowPos.argtypes = [
+                ctypes.wintypes.HWND, ctypes.wintypes.HWND,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.wintypes.UINT]
+            user32.SetWindowPos.restype = ctypes.wintypes.BOOL
+            user32.SetWindowPos(hwnd, ctypes.wintypes.HWND(-1), 0, 0, 0, 0,
+                                self._SWP_FLAGS)
+            return reason
+        except Exception:
+            return None
+
     def move_to(self, x: int, y: int):
         self.root.geometry(f"+{x}+{y}")
 

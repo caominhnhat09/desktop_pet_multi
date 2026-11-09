@@ -14,6 +14,7 @@ Layout:
 import tkinter as tk
 from tkinter import ttk
 import datetime, time
+import window_utils
 from achievements import ACHIEVEMENT_MAP, TIER_COLORS, TIER_XP
 
 BG       = "#0F0F1A"
@@ -54,7 +55,7 @@ class AchievementUI:
         win.geometry("580x680")
         win.resizable(True, True)
         win.configure(bg=BG)
-        win.wm_attributes("-topmost", True)
+        window_utils.prepare(win, "Achievements")        # không giữ topmost: pet luôn ở trên
         win.minsize(480, 500)
 
         self._draw_header(win)

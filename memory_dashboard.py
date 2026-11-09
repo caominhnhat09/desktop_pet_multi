@@ -3,7 +3,6 @@ memory_dashboard.py — Standalone Memory Dashboard window.
 
 Tabs:
   📋 Facts      — learned facts, editable + deletable
-  💬 Chats      — conversation history
   📊 Apps       — app time bar charts
   💭 Emotions   — emotion history timeline
   📈 Stats      — full summary + LLM context preview
@@ -12,6 +11,7 @@ Tabs:
 import tkinter as tk
 from tkinter import ttk, messagebox
 import datetime, time, os, json
+import window_utils
 
 
 BG        = "#0F0F1A"
@@ -68,7 +68,7 @@ class MemoryDashboard:
         win.geometry("540x660")
         win.resizable(True, True)
         win.configure(bg=BG)
-        win.wm_attributes("-topmost", True)
+        window_utils.prepare(win, "Memory Dashboard")   # không giữ topmost: pet luôn ở trên
         win.minsize(480, 500)
 
         # ── Header ────────────────────────────────────────────────────────
@@ -100,7 +100,6 @@ class MemoryDashboard:
         nb.pack(fill="both", expand=True)
 
         self._build_facts(nb)
-        self._build_exchanges(nb)
         self._build_apps(nb)
         self._build_emotions(nb)
         self._build_stats(nb)
@@ -235,61 +234,6 @@ class MemoryDashboard:
             self._new_val_var.set("")
             self._win.destroy()
             self._build()
-
-    # ── Exchanges tab ─────────────────────────────────────────────────────
-
-    def _build_exchanges(self, nb):
-        f = ttk.Frame(nb, style="Mem.TFrame")
-        nb.add(f, text="💬 Chats")
-
-        exchanges = self._memory._data.get("exchanges", [])
-
-        header_row = tk.Frame(f, bg=BG)
-        header_row.pack(fill="x", padx=12, pady=(10, 4))
-        tk.Label(header_row,
-                 text=f"Last {len(exchanges)//2} conversations",
-                 bg=BG, fg=TEXT2, font=("Segoe UI", 9)).pack(side="left")
-        tk.Button(header_row, text="Clear all",
-                  command=self._clear_exchanges,
-                  bg=BG2, fg=RED, font=("Segoe UI", 8),
-                  relief="flat", cursor="hand2").pack(side="right")
-
-        frame = tk.Frame(f, bg=BG)
-        frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-        txt = tk.Text(frame, bg=BG2, fg=TEXT, font=("Segoe UI", 9),
-                      relief="flat", wrap="word", state="disabled",
-                      selectbackground=ACCENT, padx=8, pady=4)
-        sb  = ttk.Scrollbar(frame, command=txt.yview)
-        txt.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        txt.pack(side="left", fill="both", expand=True)
-
-        txt.tag_config("user", foreground="#88CCFF", font=("Segoe UI", 9, "bold"))
-        txt.tag_config("pet",  foreground=TEXT,      font=("Segoe UI", 9))
-        txt.tag_config("ts",   foreground=TEXT2,     font=("Segoe UI", 7))
-
-        txt.configure(state="normal")
-        if not exchanges:
-            txt.insert("end", "No conversations recorded yet.\nTalk to your pet! 🐾")
-        else:
-            for ex in reversed(exchanges[-40:]):
-                role   = ex.get("role", "?")
-                text   = ex.get("text", "")
-                ts     = ex.get("ts", 0)
-                tag    = "user" if role == "user" else "pet"
-                prefix = "You:  " if role == "user" else "Pet:  "
-                txt.insert("end", f"{_ts_to_str(ts)}\n", "ts")
-                txt.insert("end", f"{prefix}{text}\n\n", tag)
-        txt.configure(state="disabled")
-        txt.see("end")
-
-    def _clear_exchanges(self):
-        if messagebox.askyesno("Clear Chats",
-                               "Delete all conversation history?\nThis can't be undone.",
-                               parent=self._win):
-            self._memory._data["exchanges"] = []
-            self._win.destroy(); self._build()
 
     # ── Apps tab ──────────────────────────────────────────────────────────
 

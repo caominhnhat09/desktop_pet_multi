@@ -13,7 +13,7 @@ Updates:
   • Removed: Dream Journal, Weather
 """
 
-import sys, os, time, random, argparse, threading
+import sys, os, time, random, argparse, threading, traceback
 sys.path.insert(0, os.path.dirname(__file__))
 import config_manager
 
@@ -32,6 +32,7 @@ from voice            import VoiceListener
 from command_handler  import CommandHandler
 from accessories      import apply_accessory, unlocked_accessories, ACCESSORIES
 import alert_sound
+import window_utils
 from notifications    import NotificationManager
 from hud              import PetHUD
 from updater          import UpdateChecker
@@ -184,6 +185,11 @@ class DesktopPet:
         self._timers     = []          # threading.Timer đang chờ
         self._timer_ack  = False       # bấm vào pet = tắt chuông hẹn giờ
         self._quitting   = False
+        self._t_topmost     = 0.0         # lần cuối đặt lại "luôn ở trên cùng"
+        self._t_topmost_log = -999.0
+        self._last_fg_key   = None        # (exe, tiêu đề) của cửa sổ đang ở phía trước
+        self._t_tick_err    = -999.0
+        self._tick_errors   = 0
         self._shutdown_lock = threading.Lock()
         self._shutdown_done = False
         self._t_last_tick = time.monotonic()
@@ -471,6 +477,20 @@ class DesktopPet:
     def _on_double_click(self, e):
         if not self._dragging:
             self.do_trick()
+
+    def _raise_pet(self):
+        """Đưa cửa sổ pet lên lại trên cùng; ghi log (≤1 lần/30 giây) nếu phải sửa."""
+        if self._quitting:
+            return
+        now = time.monotonic()
+        self._t_topmost = now
+        try:
+            reason = self.window.keep_on_top()
+        except Exception:
+            return
+        if reason and now - self._t_topmost_log > 30:
+            self._t_topmost_log = now
+            print(f"[window] {reason} - restored")
 
     def _on_press(self, e):
         self._timer_ack = True         # bấm vào pet = tắt chuông hẹn giờ đang kêu
@@ -762,7 +782,7 @@ class DesktopPet:
         dlg.title("🐾 Pet Status")
         dlg.geometry("340x460")
         dlg.resizable(False, False)
-        dlg.wm_attributes("-topmost", True)
+        window_utils.prepare(dlg, "Pet Status")       # không giữ topmost: pet luôn ở trên
         dlg.configure(bg="#FAFAFA")
 
         lines = [
@@ -1001,7 +1021,7 @@ class DesktopPet:
     # ── Main loop ─────────────────────────────────────────────────────────
 
     def run(self):
-        def tick():
+        def _tick_body():
             if self._quitting:         # đang thoát: dừng hẳn vòng lặp, không hẹn tick tiếp
                 return
             now    = time.monotonic()
@@ -1155,7 +1175,37 @@ class DesktopPet:
             self.speech.follow(int(self.x), int(self.y), self._speech_lift())
 
             self.updater.tick()
-            self.window.root.after(16, tick)
+
+            # Giữ pet luôn nổi lên trên (không cướp focus):
+            #  - ngay khi cửa sổ phía trước đổi (mở/đóng/chuyển app), và lặp lại sau
+            #    0,25 s và 1 s vì hiệu ứng chuyển cửa sổ của Windows sắp xếp lại z-order
+            #    SAU khi sự kiện xảy ra;
+            #  - định kỳ mỗi 1 giây phòng khi bỏ sót.
+            fg_key = (ctx.foreground_exe, ctx.foreground_title)
+            if fg_key != self._last_fg_key:
+                self._last_fg_key = fg_key
+                self._raise_pet()
+                self.window.root.after(250,  self._raise_pet)
+                self.window.root.after(1000, self._raise_pet)
+            elif now - self._t_topmost > 1.0:
+                self._raise_pet()
+
+        def tick():
+            """Bản trước: một lỗi bất kỳ trong thân tick làm câu lệnh after() ở cuối không
+            bao giờ chạy -> vòng lặp dừng VĨNH VIỄN (pet đứng im/biến mất, còn giọng nói
+            vẫn chạy). Giờ lỗi được ghi log (tối đa 1 lần/10 giây) và vòng lặp tiếp tục."""
+            try:
+                _tick_body()
+            except Exception:
+                self._tick_errors += 1
+                t = time.monotonic()
+                if t - self._t_tick_err > 10:
+                    self._t_tick_err = t
+                    print(f"[tick] error #{self._tick_errors} (loop keeps running):")
+                    traceback.print_exc()
+            finally:
+                if not self._quitting:
+                    self.window.root.after(16, tick)
 
         tick()
         self.window.root.mainloop()

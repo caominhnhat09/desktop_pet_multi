@@ -2,10 +2,12 @@
 settings_window.py — Settings panel launched from tray.
 """
 
+import time
 import tkinter as tk
 from tkinter import ttk
 import os, sys
 import config_manager
+import window_utils
 from memory_dashboard import MemoryDashboard
 from achievement_ui   import AchievementUI
 
@@ -38,6 +40,7 @@ class SettingsWindow:
         self._win      = None
         self._mem_dash = None
         self._ach_ui   = None
+        self._flash_id = None
 
     def open(self):
         if self._win and self._win.winfo_exists():
@@ -52,7 +55,9 @@ class SettingsWindow:
         win.geometry("460x600")
         win.resizable(False, False)
         win.configure(bg="#FAFAFA")
-        win.wm_attributes("-topmost", True)
+        # Không đặt -topmost vĩnh viễn: cửa sổ này sẽ che mất pet (pet cũng topmost).
+        # Chỉ nhảy lên trước một lần khi mở; pet luôn nằm trên cửa sổ này.
+        window_utils.prepare(win, "Settings")
 
         # Header
         hdr = tk.Frame(win, bg="#2D2D3A", height=56)
@@ -87,6 +92,9 @@ class SettingsWindow:
         # Footer
         footer = tk.Frame(win, bg="#FAFAFA")
         footer.pack(fill="x", padx=12, pady=(0, 10))
+        self._footer_msg = tk.Label(footer, text="", bg="#FAFAFA", fg="#228855",
+                                    font=("Segoe UI", 9, "bold"))
+        self._footer_msg.pack(side="left", padx=4)
         tk.Button(footer, text="Save & Close", command=self._save_and_close,
                   bg="#2D2D3A", fg="white", font=("Segoe UI", 9, "bold"),
                   relief="flat", padx=16, pady=6,
@@ -221,47 +229,42 @@ class SettingsWindow:
                  label="Seconds idle before sleeping").pack(
                  fill="x", padx=16, pady=(0, 12))
 
-        self._section(f, "Behaviour Toggles")
-        self._window_avoid_var = tk.BooleanVar(value=True)
-        self._night_mode_var   = tk.BooleanVar(value=True)
-        for text, var in [("Avoid open windows while walking", self._window_avoid_var),
-                          ("Night mode tint after 9pm",        self._night_mode_var)]:
-            tk.Checkbutton(f, text=text, variable=var,
-                           bg="#FAFAFA", font=("Segoe UI", 9),
-                           activebackground="#FAFAFA",
-                           cursor="hand2").pack(anchor="w", padx=16, pady=2)
-
     # ── Voice ─────────────────────────────────────────────────────────────
 
     def _build_voice(self, nb):
+        """Tab chỉ để XEM: không bấm, không gõ được.
+        (Bản cũ: ô wake words và 3 nút engine trông như chỉnh được nhưng engine không
+        điều khiển gì; còn wake words khi bấm Save sẽ ghi đè wake words của pet hiện tại.)"""
         f = ttk.Frame(nb); nb.add(f, text="🎤 Voice")
+        vl = self._pet.voice
 
         self._section(f, "Wake Words")
-        tk.Label(f, text="Comma-separated. Default: hey buddy, okay dog",
+        tk.Label(f, text="Fixed for the current pet — read only.",
                  bg="#FAFAFA", fg="#666677", font=("Segoe UI", 8),
                  wraplength=380).pack(anchor="w", padx=16, pady=(0, 4))
-        current = ", ".join(getattr(self._pet.voice, "wake_words", ["hey buddy"]))
+        current = ", ".join(getattr(vl, "wake_words", ["hey buddy"]))
         self._wake_var = tk.StringVar(value=current)
         tk.Entry(f, textvariable=self._wake_var, font=("Segoe UI", 10),
-                 bg="white", relief="solid", bd=1).pack(
-                 fill="x", padx=16, pady=(0, 12))
+                 state="disabled", disabledbackground="#EEEEF2",
+                 disabledforeground="#333344", relief="flat", bd=1,
+                 takefocus=0, cursor="arrow").pack(fill="x", padx=16, pady=(0, 12))
 
         self._section(f, "Voice Engine")
-        self._voice_engine_var = tk.StringVar(value="google")
-        for engine, desc in [
-                ("google",  "Google Web Speech — fast, needs internet"),
-                ("sphinx",  "CMU Sphinx — offline, less accurate"),
-                ("whisper", "Whisper tiny — offline, accurate, slower")]:
-            row = tk.Frame(f, bg="#FAFAFA"); row.pack(fill="x", padx=16, pady=1)
-            tk.Radiobutton(row, text=engine.capitalize(),
-                           variable=self._voice_engine_var, value=engine,
-                           bg="#FAFAFA", font=("Segoe UI", 9, "bold"),
-                           cursor="hand2").pack(side="left")
-            tk.Label(row, text=desc, bg="#FAFAFA", fg="#666677",
-                     font=("Segoe UI", 8)).pack(side="left", padx=6)
+        # Chỉ hiển thị engine chính (Google). Sphinx / Whisper là phương án dự phòng do
+        # voice.py tự chọn nên không liệt kê ở đây. Chọn sẵn khi SpeechRecognition có mặt.
+        self._voice_engine_var = tk.StringVar(
+            value="google" if getattr(vl, "_sr_available", False) else "")
+        row = tk.Frame(f, bg="#FAFAFA"); row.pack(fill="x", padx=16, pady=1)
+        tk.Radiobutton(row, text="Google",
+                       variable=self._voice_engine_var, value="google",
+                       state="disabled", disabledforeground="#333344",
+                       bg="#FAFAFA", font=("Segoe UI", 9, "bold"),
+                       takefocus=0, cursor="arrow").pack(side="left")
+        tk.Label(row, text="Google Web Speech — fast, needs internet",
+                 bg="#FAFAFA", fg="#666677",
+                 font=("Segoe UI", 8)).pack(side="left", padx=6)
 
         self._section(f, "Voice Status")
-        vl = self._pet.voice
         ok = vl.is_available
         tk.Label(f,
                  text="✅ Microphone active" if ok else "❌ No microphone / STT library",
@@ -322,10 +325,33 @@ class SettingsWindow:
                                         font=("Segoe UI", 8), anchor="w",
                                         justify="left", wraplength=420)
         self._report_summary.pack(fill="x", padx=16, pady=(2, 0))
-        tk.Button(f, text="↻ Refresh", command=self._refresh_pomodoro,
+        tk.Button(f, text="↻ Refresh", command=self._on_refresh_click,
                   bg="#FAFAFA", fg="#666677", font=("Segoe UI", 8),
                   relief="flat", cursor="hand2").pack(anchor="e", padx=16)
         self._refresh_pomodoro()
+
+    def _on_refresh_click(self):
+        self._refresh_pomodoro()
+        self._flash("✓ Refreshed " + time.strftime("%H:%M:%S"))
+
+    def _flash(self, msg: str, ms: int = 3000):
+        """Hiện một dòng thông báo ngắn ở chân cửa sổ rồi tự xoá."""
+        try:
+            self._footer_msg.config(text=msg)
+            root = self._win.nametowidget(".")
+            if self._flash_id:
+                root.after_cancel(self._flash_id)
+            self._flash_id = root.after(ms, self._clear_flash)
+        except Exception:
+            pass
+
+    def _clear_flash(self):
+        self._flash_id = None
+        try:
+            if self._win and self._win.winfo_exists():
+                self._footer_msg.config(text="")
+        except Exception:
+            pass
 
     def _on_focus_change(self, minutes):
         self._pet.set_reminder(minutes)
@@ -345,6 +371,9 @@ class SettingsWindow:
         """Cập nhật trạng thái hiện tại, focus streak và biểu đồ 7 ngày."""
         try:
             st    = self._pet.reminder.status()
+            # Đồng bộ lại các nút chọn với trạng thái THẬT của pet
+            self._reminder_var.set(st["focus_goal"] if st["enabled"] else 0)
+            self._remind_style_var.set(st["style"])
             n     = self._pet.screen_time.pomodoros_today
             self._pomo_streak_lbl.config(
                 text=f"Today: {n} Pomodoro{'s' if n != 1 else ''} completed")
@@ -632,19 +661,25 @@ class SettingsWindow:
         self._pet._follow_speed  = self._follow_var.get()
         self._pet._afk_sleep_sec = self._afk_var.get()
 
-        # Voice
-        words = [w.strip() for w in self._wake_var.get().split(",") if w.strip()]
-        if words:
-            self._pet.voice.wake_words = words
-
+        # (Voice là chỉ-đọc: không ghi wake words nữa, tránh đè wake words của pet hiện tại)
         self._pet.state.save()
         self._win.destroy()
 
     def _reset(self):
+        """Đưa cài đặt về mặc định VÀ áp dụng ngay.
+        Bản cũ chỉ gán giá trị cho biến giao diện: không áp dụng vào pet, không đổi nút
+        phong cách nhắc, không cập nhật nhãn/biểu đồ nên trông như "không có gì xảy ra"."""
+        pet = self._pet
+        # Hiển thị (áp dụng khi bấm Save & Close, như khi bạn tự gõ)
         self._name_var.set("Buddy")
-        self._personality_var.set("playful")
-        self._speed_var.set(1.0)
-        self._color_var.set("Default")
-        self._reminder_var.set(45)
-        self._follow_var.set(0.15)
-        self._afk_var.set(120)
+        # Áp dụng ngay (các điều khiển này vốn đã có tác dụng tức thì khi bạn kéo/chọn)
+        self._personality_var.set("playful");   self._on_personality_change()
+        self._speed_var.set(1.0);               pet.anim_speed = 1.0
+        self._follow_var.set(0.15);             pet._follow_speed = 0.15
+        self._afk_var.set(120);                 pet._afk_sleep_sec = 120
+        self._color_var.set("Default");         pet.set_color("default")
+        # Pomodoro: độ dài focus + phong cách nhắc
+        self._reminder_var.set(45);             pet.set_reminder(45)
+        self._remind_style_var.set("friendly"); self._on_style_change()
+        self._refresh_pomodoro()
+        self._flash("✓ Defaults restored")
