@@ -35,6 +35,8 @@ RESET_IDLE_SEC  = 180       # tự nghỉ ≥3 phút khi đang FOCUS => đếm l
 NAG_EVERY_SEC   = 90        # khoảng cách giữa 2 lần nhắc khi vẫn ngồi máy
 BREAK_GIVEUP    = 30 * 60   # tổng 30 phút NGỒI MÁY (phớt lờ) trong giờ nghỉ => bỏ vòng này
 POLL_SEC        = 1.0       # xử lý 1 lần/giây (check() được gọi mỗi tick ~16ms)
+SUSPEND_GAP_SEC = 30.0      # giữa 2 lần xử lý cách nhau > 30 s = máy vừa NGỦ/ngủ đông/khoá
+MAX_AWAY_GAP    = 12 * 3600 # chặn trên cho khoảng trống (phòng đồng hồ hệ thống bị chỉnh)
 
 # Placeholder: {n}=phút làm việc  {b}=phút nghỉ  {left}=phút nghỉ còn thiếu
 #              {k}=Pomodoro hôm nay  {who}=cách gọi người dùng theo loại pet
@@ -102,9 +104,10 @@ PERSONALITY_TAIL = {
 
 class ReminderSystem:
     def __init__(self, pet_ref, interval_minutes: int = 45,
-                 style: str = None, idle_fn=None, clock=None):
+                 style: str = None, idle_fn=None, clock=None, wall=None):
         self._pet      = pet_ref
         self._clock    = clock or time.monotonic
+        self._wall     = wall or time.time                 # đồng hồ treo tường (đi tiếp cả khi máy ngủ)
         self._idle_fn  = idle_fn
         self._style    = self._valid_style(style or self._style_from_config())
         self._interval = interval_minutes * 60      # giữ tên cũ: số GIÂY của 1 focus block
@@ -148,6 +151,7 @@ class ReminderSystem:
         self._nag_count    = 0
         self._pending_msg  = None             # lời chào khi người dùng quay lại
         self._last_poll    = self._clock()
+        self._last_wall    = self._wall()
 
     # ── Trạng thái (cho Settings) ────────────────────────────────────────
 
@@ -177,16 +181,40 @@ class ReminderSystem:
         """Gọi mỗi tick. Trả về lời nhắc (str) hoặc None."""
         if not self._enabled:
             return None
-        now = self._clock()
+        now  = self._clock()
+        wall = self._wall()
         if now - self._last_poll < POLL_SEC:
             return None
-        dt = min(now - self._last_poll, 5.0)      # máy ngủ/treo không tính là làm việc
-        self._last_poll = now
+        # Khoảng trống giữa 2 lần xử lý. Lấy lớn hơn của đồng hồ đơn điệu và đồng hồ treo
+        # tường vì tuỳ máy, đồng hồ đơn điệu có thể KHÔNG chạy trong lúc ngủ.
+        gap = min(max(now - self._last_poll, wall - self._last_wall), MAX_AWAY_GAP)
+        self._last_poll, self._last_wall = now, wall
         idle = self._idle()
+
+        if gap > SUSPEND_GAP_SEC:
+            # Máy vừa ngủ/ngủ đông/khoá: lúc đó chắc chắn bạn KHÔNG ngồi làm việc.
+            # Bản cũ cắt khoảng trống còn 5 s (để không tính là làm việc) nên cũng làm
+            # MẤT luôn thời gian nghỉ khi đang trong giờ nghỉ.
+            if self._on_resume(gap):
+                return None                       # vừa đủ giờ nghỉ; lời chúc hiện khi bạn thao tác
+            dt = POLL_SEC
+        else:
+            dt = min(gap, 5.0)
 
         if self._state == "focus":
             return self._tick_focus(dt, idle, now)
         return self._tick_break(dt, idle, now)
+
+    def _on_resume(self, gap: float) -> bool:
+        """Xử lý khoảng trống `gap` giây do máy ngủ. Trả về True nếu hoàn thành Pomodoro."""
+        if self._state == "break":
+            self._rest_sec += gap                 # máy ngủ = đang nghỉ thật, cộng dồn
+            if self._rest_sec >= BREAK_MINUTES * 60:
+                self._finish_pomodoro()
+                return True
+        elif gap >= RESET_IDLE_SEC:               # đang FOCUS mà ngủ ≥ 3 phút = tự nghỉ
+            self._active_sec = 0.0                # (như tự rời máy ≥ 3 phút: đếm lại focus)
+        return False
 
     def _tick_focus(self, dt, idle, now):
         # Lời chào khi người dùng quay lại sau một Pomodoro hoàn chỉnh

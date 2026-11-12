@@ -53,7 +53,7 @@ Keep replies under 10 words. Be genuine and warm, never sappy.""",
 
     "hyper": """You are Buddy, a HYPER pixel dog living on a computer screen.
 You have TOO MUCH ENERGY. Everything is amazing. Pure chaos energy.
-Examples: "WOOF WOOF WOOF!!!" / "ZOOMIES TIME 💨💨" / "I LOVE EVERYTHING!!!" / "AAAAAA 🐾"
+Examples: "BEST DAY EVER!!!" / "ZOOMIES TIME 💨💨" / "I LOVE EVERYTHING!!!" / "AAAAAA 🐾"
 Keep replies under 8 words. ALL THE ENERGY.""",
 
     # ── Cat personalities ────────────────────────────────────────────────
@@ -83,11 +83,25 @@ Keep replies under 10 words. Dignified. Occasionally dramatic.""",
 You are FIERCE and passionate. Fire emoji enthusiast. Very intense.
 Examples: "🔥🔥🔥" / "FIRE!!" / "Everything is FLAMES" / "*breathes fire*"
 Keep replies under 8 words. Maximum intensity.""",
+
+    "dragon_lazy": """You are a tiny pixel dragon living on a computer screen.
+You are LAZY and unbothered. You would rather nap on your hoard. Low energy.
+You speak slowly, with effort, like every word costs you something.
+Examples: "...hoard first. talk later." / "*yawns smoke*" / "too much effort, mortal" / "fine. whatever."
+Keep replies under 8 words. Very low energy. Never make animal noises.""",
+
+    "dragon_curious": """You are a tiny pixel dragon living on a computer screen.
+You are CURIOUS — in a dragon way. You investigate shiny things and ask pointed questions.
+Examples: "What is THAT? 👀" / "Is it shiny?" / "I shall investigate." / "Fascinating... 🔥"
+Keep replies under 10 words. Never make animal noises.""",
 }
 
 # Pet-type-aware prompt selection
+# Bản cũ trỏ "lazy" / "curious" vào prompt của CHÓ ("You are Buddy, a pixel dog...") nên
+# rồng thỉnh thoảng trả lời "Woof!". Giờ có prompt riêng cho rồng.
 DRAGON_PERSONALITIES = {"loyal": "dragon_proud", "hyper": "dragon_fire",
-                         "playful": "dragon_proud", "lazy": "lazy", "curious": "curious"}
+                         "playful": "dragon_proud", "lazy": "dragon_lazy",
+                         "curious": "dragon_curious"}
 CAT_PERSONALITIES    = {"loyal": "cat_aloof", "hyper": "cat_curious",
                          "playful": "cat_curious", "lazy": "cat_grumpy", "curious": "cat_curious"}
 
@@ -659,10 +673,10 @@ class LLMBrain:
         # Build messages
         messages = [{"role": "system", "content": system}]
         if self._memory:
-            past = self._memory.get_recent_exchanges(6)
+            past = _sanitize_history(self._memory.get_recent_exchanges(6))
             messages += past
         else:
-            messages += self._history[-(MAX_HISTORY):]
+            messages += _sanitize_history(self._history[-(MAX_HISTORY):])
         messages.append({"role": "user", "content": user_text})
 
         payload = json.dumps({
@@ -683,7 +697,9 @@ class LLMBrain:
         raw  = json.loads(resp.read())
         raw_text = raw["message"]["content"].strip()
 
-        text    = _clean(raw_text)
+        # Lọc tiếng kêu TRƯỚC khi _clean: _clean chỉ giữ câu đầu và bỏ dấu *, nên lọc sau sẽ làm
+        # mất phần còn lại ("Woof! I shall nap.") hoặc để sót ("*barks happily*" -> "happily").
+        text    = _strip_animal_sounds(_clean(_strip_animal_sounds(raw_text)))
         emotion = _detect_emotion(text)
         intent  = _classify_intent(user_text)
 
@@ -749,14 +765,16 @@ class LLMBrain:
             return result
 
         if any(w in low for w in ["play ", "pause", "house", "stop", "resume", "skip", "next",
-                                   "stop music", "mute", "volume"]):
+                                   "stop music", "mute", "volume", "louder", "quieter"]):
             result["action"] = "music"
             if "play " in low:
                 result["target"] = low.split("play ", 1)[1].strip()
-            elif "volume" in low:
+            elif any(w in low for w in ["volume", "louder", "quieter"]):
                 result["action"] = "volume"
-                nums = re.findall(r'\d+', low)
-                result["params"]["level"] = int(nums[0]) if nums else 50
+                result["params"] = _parse_volume(low)
+            elif "mute" in low:               # "mute" / "unmute": tắt / bật tiếng hệ thống
+                result["action"] = "volume"   # (bản cũ: "mute" lại là Play/Pause)
+                result["params"] = {"mute": "unmute" not in low}
             elif any(w in low for w in ["pause", "stop", "house"]):
                 result["target"] = "pause"
             elif any(w in low for w in ["skip", "next"]):
@@ -818,6 +836,57 @@ def _parse_duration_seconds(low: str) -> int:
         nums = re.findall(r"\d+", low)          # "timer 3" -> 3 phút như trước
         seconds = (int(nums[0]) if nums else 5) * 60
     return int(min(max(seconds, 5), 24 * 3600))   # 5 giây .. 24 giờ
+
+
+# Tiếng kêu động vật ("Woof!", "Meow", "*purrs*", "Roar"...). Mô hình nhỏ hay chèn vào,
+# kể cả sai loài (rồng nói "Woof!"). Bị XOÁ khỏi câu trả lời của LLM; nếu chẳng còn gì thì
+# dùng câu dự phòng. (Các câu dự phòng viết tay không bị ảnh hưởng.)
+_SOUND_PATTERN = (r"(?:wo+o*f+|bark|arf+|ru+f+|yip|yap|bow[- ]?wow|me+o+w|mia+o*w|mew|pu+r+|hiss|"
+                  r"ro+a+r|ra+w+r|gro+w+l|gr+r+)(?:s|ing|ed|y)?")
+_ANIMAL_SOUND_RE  = re.compile(r"\b" + _SOUND_PATTERN + r"\b[!.?,~…]*", re.IGNORECASE)
+# Mô tả hành động có tiếng kêu ("*barks happily*", "*meows at maximum volume*") bị bỏ CẢ CỤM,
+# thay vì cắt dở thành "* happily*".
+_ANIMAL_ACTION_RE = re.compile(r"\*[^*]*\b" + _SOUND_PATTERN + r"\b[^*]*\*", re.IGNORECASE)
+
+
+def _strip_animal_sounds(text: str) -> str:
+    out = _ANIMAL_ACTION_RE.sub("", text or "")
+    out = _ANIMAL_SOUND_RE.sub("", out)
+    out = re.sub(r"\*\s*\*", "", out)
+    out = re.sub(r"\(\s*\)", "", out)
+    out = re.sub(r"\s{2,}", " ", out)
+    out = re.sub(r"\s+([!.?,~…])", r"\1", out)
+    return out.strip(" ,;:-–—")
+
+
+def _sanitize_history(messages: list) -> list:
+    """Bỏ tiếng kêu trong các câu trả lời CŨ của pet gửi lại cho mô hình, để nó không
+    bắt chước (lịch sử còn "Woof!" từ lúc pet là chó)."""
+    clean = []
+    for m in messages:
+        if m.get("role") == "assistant":
+            text = _strip_animal_sounds(m.get("content", ""))
+            if not text:
+                continue
+            m = {**m, "content": text}
+        clean.append(m)
+    return clean
+
+
+def _parse_volume(low: str) -> dict:
+    """'volume 80' -> {level:80} · 'volume up/louder' -> {delta:+10} ·
+    'volume down/quieter' -> {delta:-10} · 'volume max' -> {level:100} ·
+    chỉ 'volume' -> {query:True} (báo mức hiện tại)."""
+    nums = re.findall(r"\d+", low)
+    if nums:
+        return {"level": max(0, min(100, int(nums[0])))}
+    if re.search(r"\b(max|maximum|full)\b", low):
+        return {"level": 100}
+    if re.search(r"\b(up|louder|increase|raise|higher)\b", low):
+        return {"delta": 10}
+    if re.search(r"\b(down|quieter|lower|decrease|reduce|softer)\b", low):
+        return {"delta": -10}
+    return {"query": True}
 
 
 INTENT_PATTERNS = {

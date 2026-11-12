@@ -16,5 +16,10 @@ winotify>=1.1.0
 # Spotify Web API (optional)
 # No extra deps needed — uses urllib only
 
+# System volume control (recommended): lets the `volume` command set the PC volume exactly.
+# Without these it falls back to simulated volume keys (approximate).
+pycaw
+comtypes
+
 # Build
 pyinstaller>=6.0.0

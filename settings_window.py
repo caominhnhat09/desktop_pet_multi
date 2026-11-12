@@ -206,28 +206,20 @@ class SettingsWindow:
         spd_row.pack(fill="x", padx=16, pady=(0, 12))
         tk.Label(spd_row, text="Slow", bg="#FAFAFA", fg="#666677",
                  font=("Segoe UI", 8)).pack(side="left")
-        tk.Scale(spd_row, from_=0.3, to=3.0, resolution=0.1,
+        spd_scale = tk.Scale(spd_row, from_=0.3, to=3.0, resolution=0.1,
                  variable=self._speed_var, orient="horizontal",
                  bg="#FAFAFA", highlightthickness=0, showvalue=True,
-                 command=lambda v: setattr(self._pet, "anim_speed", float(v))
-                 ).pack(side="left", fill="x", expand=True, padx=6)
+                 command=lambda v: setattr(self._pet, "anim_speed", float(v)))
+        spd_scale.pack(side="left", fill="x", expand=True, padx=6)
+        # Áp dụng ngay khi kéo (như cũ) và GHI config.json khi thả chuột / thả phím
+        # (không ghi liên tục lúc đang kéo).
+        spd_scale.bind("<ButtonRelease-1>", lambda e: self._pet.save_config())
+        spd_scale.bind("<KeyRelease>",      lambda e: self._pet.save_config())
         tk.Label(spd_row, text="Turbo", bg="#FAFAFA", fg="#666677",
                  font=("Segoe UI", 8)).pack(side="left")
 
-        self._section(f, "Follow Sensitivity")
-        self._follow_var = tk.DoubleVar(value=self._pet._follow_speed)
-        tk.Scale(f, from_=0.05, to=0.4, resolution=0.01,
-                 variable=self._follow_var, orient="horizontal",
-                 bg="#FAFAFA", highlightthickness=0, showvalue=True,
-                 label="Cursor follow speed").pack(fill="x", padx=16, pady=(0, 12))
-
-        self._section(f, "AFK Sleep Threshold")
-        self._afk_var = tk.IntVar(value=self._pet._afk_sleep_sec)
-        tk.Scale(f, from_=30, to=600, resolution=10,
-                 variable=self._afk_var, orient="horizontal",
-                 bg="#FAFAFA", highlightthickness=0, showvalue=True,
-                 label="Seconds idle before sleeping").pack(
-                 fill="x", padx=16, pady=(0, 12))
+        # (Đã ẩn "Follow Sensitivity" và "AFK Sleep Threshold": hai giá trị này vẫn
+        #  được đọc từ config.json — follow_speed, afk_sleep_sec — nhưng không chỉnh trên giao diện.)
 
     # ── Voice ─────────────────────────────────────────────────────────────
 
@@ -658,11 +650,10 @@ class SettingsWindow:
 
         # Behaviour
         self._pet.anim_speed     = self._speed_var.get()
-        self._pet._follow_speed  = self._follow_var.get()
-        self._pet._afk_sleep_sec = self._afk_var.get()
 
         # (Voice là chỉ-đọc: không ghi wake words nữa, tránh đè wake words của pet hiện tại)
         self._pet.state.save()
+        self._pet.save_config()          # đồng bộ config.json với cài đặt vừa áp dụng
         self._win.destroy()
 
     def _reset(self):
@@ -675,11 +666,10 @@ class SettingsWindow:
         # Áp dụng ngay (các điều khiển này vốn đã có tác dụng tức thì khi bạn kéo/chọn)
         self._personality_var.set("playful");   self._on_personality_change()
         self._speed_var.set(1.0);               pet.anim_speed = 1.0
-        self._follow_var.set(0.15);             pet._follow_speed = 0.15
-        self._afk_var.set(120);                 pet._afk_sleep_sec = 120
         self._color_var.set("Default");         pet.set_color("default")
         # Pomodoro: độ dài focus + phong cách nhắc
         self._reminder_var.set(45);             pet.set_reminder(45)
         self._remind_style_var.set("friendly"); self._on_style_change()
         self._refresh_pomodoro()
+        pet.save_config()
         self._flash("✓ Defaults restored")

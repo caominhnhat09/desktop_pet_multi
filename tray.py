@@ -46,8 +46,9 @@ def _build_icon(pet, img):
     def show_status(i, it):
         pet.window.root.after(0, pet.show_status_dialog)
 
-    def toggle_follow(i, it):   pet.toggle_follow()
-    def toggle_sit(i, it):      pet.toggle_sit()
+    def set_follow(i, it):      pet.set_follow()
+    def set_sit(i, it):         pet.set_sit()
+    def set_default(i, it):     pet.set_default()
     def toggle_hud(i, it):      pet.toggle_hud()
     def toggle_startup(i, it):  _set_startup(not _startup_enabled())
     def switch_dog(i, it):      pet.window.root.after(0, lambda: pet.switch_pet("dog"))
@@ -65,7 +66,9 @@ def _build_icon(pet, img):
         return fn
 
     def set_speed(s):
-        def fn(i, it): pet.anim_speed = s
+        def fn(i, it):
+            pet.anim_speed = s
+            pet.save_config()          # ghi config.json ngay (trước đây chỉ ghi khi thoát)
         return fn
 
     def set_reminder(m):
@@ -104,8 +107,10 @@ def _build_icon(pet, img):
             Item("Cat 🐱",    switch_cat,    checked=lambda i: pet.pet_type=="cat"),
         )),
         Menu.SEPARATOR,
-        Item("Follow Cursor",     toggle_follow,  checked=lambda i: pet.follow_mode),
-        Item("Sit / Stay",        toggle_sit,     checked=lambda i: pet.sit_mode),
+        Item("Follow Cursor",     set_follow,  checked=lambda i: pet.follow_mode, radio=True),
+        Item("Sit / Stay",        set_sit,     checked=lambda i: pet.sit_mode,    radio=True),
+        Item("Default",           set_default,
+             checked=lambda i: not pet.follow_mode and not pet.sit_mode, radio=True),
         Item("Show HUD",          toggle_hud,     checked=lambda i: pet.hud_enabled),
         Item("Launch at Startup", toggle_startup, checked=lambda i: _startup_enabled()),
         Menu.SEPARATOR,

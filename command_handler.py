@@ -75,16 +75,37 @@ class CommandHandler:
                 return f"Searching: {target} 🎶"
 
     def _volume(self, target: str, params: dict) -> str:
-        level = int(params.get("level", 50))
-        sp    = self._spotify
-        if sp and sp.is_available:
-            return sp.set_volume(level)
-        # Win32 media keys fallback
-        if level > 60:
-            for _ in range(3): self._media_key("volume_up")
-        elif level < 40:
-            for _ in range(3): self._media_key("volume_down")
-        return f"Volume adjusted! 🔊"
+        """Âm lượng. Bản cũ chỉ bấm phím tăng/giảm đúng 3 lần (≈6%, Windows đổi 2%/lần),
+        không làm gì khi 40-60 và LUÔN báo "adjusted" -> trông như không có tác dụng.
+        Giờ đặt đúng mức bạn nói (xem system_volume.py)."""
+        sp = self._spotify
+        if sp and sp.is_available and "level" in params:
+            return sp.set_volume(int(params["level"]))        # có Spotify API: như cũ
+
+        import system_volume as sv
+        if not sv.SUPPORTED:
+            return "Volume control works on Windows only 🔇"
+
+        if "mute" in params:
+            state, how = sv.set_mute(bool(params["mute"]))
+            if how == "keys":
+                return "Mute toggled 🔇"
+            return "Muted 🔇" if state else "Unmuted 🔊"
+
+        if "level" in params:
+            level, how = sv.set_level(params["level"])
+        elif "delta" in params:
+            level, how = sv.change(params["delta"])
+        else:                                                  # chỉ nói "volume"
+            level, how = sv.get_level(), "exact"
+            if level is None:
+                return "Say a number, like 'volume 60' 🔊"
+            return f"Volume is at {level}% 🔊"
+
+        if level is None:                                      # chỉ biết đã bấm phím
+            return "Volume " + ("up" if params.get("delta", 0) > 0 else "down") + " 🔊"
+        approx = "~" if how == "keys" else ""
+        return f"Volume {approx}{level}% " + ("🔇" if level == 0 else "🔊")
 
     def _media_key(self, key: str):
         if not self._win32: return
@@ -101,7 +122,7 @@ class CommandHandler:
         "spotify":"spotify","chrome":"chrome","google chrome":"chrome",
         "firefox":"firefox","edge":"msedge","vs code":"code","vscode":"code",
         "notepad":"notepad","calculator":"calc","explorer":"explorer",
-        "task manager":"taskmgr","discord":"discord","slack":"slack",
+        "task manager":"taskmgr",
         "terminal":"cmd","powershell":"powershell", "command line":"cmd",
         "word":"winword","microsoft word":"winword",
         "excel":"excel","microsoft excel":"excel",
@@ -125,7 +146,6 @@ class CommandHandler:
 
     # App tự đăng ký giao thức riêng: mở bằng URI đáng tin hơn gọi tên .exe
     PROTOCOL_MAP = {
-        "discord": "discord://",
         "slack":   "slack://",
         "spotify": "spotify:",
     }
@@ -155,7 +175,7 @@ class CommandHandler:
         exe = self.APP_MAP.get(name, name)
 
         if self._win32:
-            # 2) Giao thức riêng (discord://, slack://, spotify:)
+            # 2) Giao thức riêng ( slack://, spotify:)
             proto = self.PROTOCOL_MAP.get(exe)
             if proto:
                 try:
@@ -165,16 +185,6 @@ class CommandHandler:
                 except OSError as e:
                     print(f"[cmd] {proto} failed: {e}")
 
-            # 2b) Discord: launcher chính thức cần tham số --processStart
-            if exe == "discord":
-                upd = os.path.expandvars(r"%LocalAppData%\Discord\Update.exe")
-                if os.path.exists(upd):
-                    try:
-                        subprocess.Popen([upd, "--processStart", "Discord.exe"])
-                        print("[cmd] launched discord via Update.exe")
-                        return f"Opening {target}! 🚀"
-                    except OSError as e:
-                        print(f"[cmd] Update.exe failed: {e}")
 
         # 3) Tên chương trình / đường dẫn cài đặt
         if self._launch(exe):

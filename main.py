@@ -228,6 +228,7 @@ class DesktopPet:
         self._t_meet_speech       = 0.0
         self._t_zzz               = 0.0
         self._t_save              = 0.0
+        self.window.root.after(3000, self.save_config)   # đồng bộ config.json ngay sau khi khởi động
         self._t_llm_idle          = 0.0
         self._t_llm_idle_interval = random.uniform(60, 90)  # fixed interval, not re-rolled every tick
         self._t_screen_time       = 0.0   # throttle screen_time.tick() to once/min
@@ -327,6 +328,7 @@ class DesktopPet:
         if name:
             self.achievements.on_accessory_equipped(name, unlocked)
         print(f"[pet] accessory → {name}")
+        self.save_config()
 
     def _get_frames_with_acc(self, anim_name: str) -> list:
         if not self._active_accessory:
@@ -378,8 +380,11 @@ class DesktopPet:
         menu.add_command(label="Do a Trick! 🎉", command=self.do_trick)
         menu.add_command(label="Feed 🦴",        command=self.feed)
         menu.add_separator()
-        menu.add_command(label="Follow Cursor",  command=self.toggle_follow)
-        menu.add_command(label="Sit / Stay",     command=self.toggle_sit)
+        mode = self.move_mode                       # đánh dấu ✓ chế độ đang dùng
+        mark = lambda m: "✓ " if mode == m else "    "
+        menu.add_command(label=f"{mark('follow')}Follow Cursor", command=self.set_follow)
+        menu.add_command(label=f"{mark('sit')}Sit / Stay",       command=self.set_sit)
+        menu.add_command(label=f"{mark('default')}Default",      command=self.set_default)
         menu.add_separator()
         menu.add_command(label="⚙️ Settings",    command=self.open_settings)
         menu.add_command(label="Pet Status",     command=self.show_status_dialog)
@@ -440,20 +445,7 @@ class DesktopPet:
         _safe(self.achievements.save)
         _safe(lambda: self.achievements.on_session_end(
             self.memory.session_duration_minutes()))
-        _safe(lambda: config_manager.save({
-            "pet":           self.pet_type,
-            "speed":         self.anim_speed,
-            "color":         next((k for k, v in TINTS.items()
-                                   if v == self._color_tint), "default"),
-            "accessory":     self._active_accessory,
-            "last_x":        int(self.x),
-            "last_y":        int(self.y),
-            "reminder_min":  self.reminder._interval // 60,
-            "reminder_style": self.reminder.style,
-            "afk_sleep_sec": self._afk_sleep_sec,
-            "hud_enabled":   self.hud_enabled,
-            "follow_speed":  self._follow_speed,
-        }))
+        _safe(self.save_config)
         _safe(self.voice.stop)
         _safe(self.clipboard.stop)
         # Gỡ biểu tượng khay hệ thống: chạy ở luồng riêng, chờ tối đa 1 giây để
@@ -612,9 +604,60 @@ class DesktopPet:
     def set_color(self, name):
         self._color_tint = TINTS.get(name)
         self.achievements.on_color_tried(name)
+        self.save_config()
 
-    def toggle_follow(self):  self.follow_mode = not self.follow_mode
-    def toggle_sit(self):     self.sit_mode    = not self.sit_mode
+    # ── Cấu hình ──────────────────────────────────────────────────────────
+
+    def _config_snapshot(self) -> dict:
+        """Cấu hình HIỆN TẠI của pet (đúng với những gì đang chạy)."""
+        return {
+            "pet":            self.pet_type,
+            "speed":          self.anim_speed,
+            "color":          next((k for k, v in TINTS.items()
+                                    if v == self._color_tint), "default"),
+            "accessory":      self._active_accessory,
+            "last_x":         int(self.x),
+            "last_y":         int(self.y),
+            "reminder_min":   self.reminder._interval // 60,
+            "reminder_style": self.reminder.style,
+            "afk_sleep_sec":  self._afk_sleep_sec,
+            "hud_enabled":    self.hud_enabled,
+            "follow_speed":   self._follow_speed,
+            # wake word của pet HIỆN TẠI (bản cũ luôn để mặc định của chó trong file)
+            "wake_words":     list(self.voice.wake_words),
+        }
+
+    def save_config(self):
+        """Ghi config.json NGAY. Bản cũ chỉ ghi khi thoát nên file luôn lệch với cài đặt
+        đang dùng (phụ kiện, tốc độ, thời gian Pomodoro, wake words theo từng pet...)."""
+        try:
+            config_manager.save(self._config_snapshot())
+        except Exception as e:
+            print(f"[config] save failed: {e}")
+
+    # ── Chế độ di chuyển ────────────────────────────────────────────────
+    # Bản cũ: Follow và Sit là hai CÔNG TẮC độc lập (bấm lần hai là tắt, và có thể bật cả
+    # hai cùng lúc) nên trông như "hoạt động theo chu kỳ". Giờ mỗi nút ĐẶT đúng một chế độ;
+    # bấm bao nhiêu lần chế độ vẫn giữ nguyên.
+    def set_follow(self):   self._set_move_mode("follow")    # luôn đi theo con trỏ
+    def set_sit(self):      self._set_move_mode("sit")       # đứng yên một chỗ (vẫn có hoạt ảnh)
+    def set_default(self):  self._set_move_mode("default")   # hành vi tự nhiên mặc định
+
+    def _set_move_mode(self, mode: str):
+        self.follow_mode = (mode == "follow")
+        self.sit_mode    = (mode == "sit")
+        self.behavior.follow_mode = self.follow_mode
+        if not self.follow_mode and self.behavior.state == State.FOLLOW:
+            self.behavior._set(State.IDLE)       # thoát hẳn trạng thái đi theo con trỏ
+        print(f"[pet] mode -> {mode}")
+
+    @property
+    def move_mode(self) -> str:
+        return "follow" if self.follow_mode else ("sit" if self.sit_mode else "default")
+
+    # Tên cũ được giữ để tương thích nhưng không còn là công tắc
+    def toggle_follow(self):  self.set_follow()
+    def toggle_sit(self):     self.set_sit()
 
     def switch_pet(self, pet_type: str):
         if pet_type == self.pet_type:
@@ -636,15 +679,18 @@ class DesktopPet:
         except Exception:
             pass
         print(f"[pet] switched to {pet_type} | wake: {self.voice.wake_words}")
+        self.save_config()
 
     def toggle_hud(self):
         self.hud_enabled = not self.hud_enabled
         if not self.hud_enabled:
             self.hud._hide()
+        self.save_config()
 
     def set_reminder(self, m):
         """Đổi độ dài FOCUS của Pomodoro (phút, 0 = tắt). KHÔNG phải hẹn giờ."""
         self.reminder.set_interval(m)
+        self.save_config()
 
     # ── Hẹn giờ một lần: "set timer 5 minutes" ────────────────────────────
 
@@ -1050,6 +1096,7 @@ class DesktopPet:
                 self.memory.save()
                 self.screen_time.save()
                 self.achievements.save()
+                self.save_config()          # giữ last_x / last_y sát với vị trí thật
                 self._t_save = now
 
             # Sync personality

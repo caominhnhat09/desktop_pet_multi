@@ -61,6 +61,23 @@ def save(cfg: dict):
     path = _config_path()
     # Ensure the directory exists (safety net for weird install locations)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    merged = {**_DEFAULTS, **cfg}
-    with open(path, "w", encoding="utf-8") as f:
+
+    # Giữ nguyên các khóa KHÔNG thuộc _DEFAULTS đang có sẵn trong file (vd
+    # "spotify_client_id" / "spotify_client_secret"). Bản cũ ghi đè cả file bằng
+    # {mặc định + cfg} nên mỗi lần lưu là mất chúng.
+    existing = {}
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                existing = loaded
+    except Exception:
+        existing = {}
+    merged = {**_DEFAULTS, **existing, **cfg}
+
+    # Ghi nguyên tử (file tạm rồi thay thế): file không bao giờ bị cụt nếu máy tắt giữa chừng.
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(merged, f, indent=2)
+    os.replace(tmp, path)
