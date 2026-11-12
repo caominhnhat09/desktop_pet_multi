@@ -268,34 +268,6 @@ main.py              — DesktopPet class, main loop, event wiring
 
 ---
 
-## Roadmap
-
-### ✅ Shipped — Productivity Guardian
-- Pomodoro mode with the pet as accountability partner
-- Focus streak and weekly productivity report
-- Voice timers and PC volume control
-
-### v2.0 — Multiplayer
-- LAN discovery — pets on the same network find each other
-- Visit, gift, and challenge to mini-games
-
-Pet evolution and the dream journal that once appeared on the roadmap are **not** part of this version. See [PRODUCT_ROADMAP.md](PRODUCT_ROADMAP.md) for the original long-term vision (some items there are not part of this version).
-
----
-
-## Contributing
-
-Pull requests welcome. The project is structured to make new features easy to add:
-
-- **New pet type:** Create `yourpet_sprite.py` following `cat_sprite.py` as a template. Add to `PET_TYPES` in `main.py` and its wake words to `PET_WAKE_WORDS` in `voice.py`.
-- **New achievement:** Add a tuple to `ACHIEVEMENTS` in `achievements.py`. Hook the event in `main.py`.
-- **New fallback strings:** Add a context key to `FALLBACK_BY_CONTEXT_[PETTYPE]` in `llm_brain.py`.
-- **New voice command:** Add a pattern to `classify_command()` in `llm_brain.py`, handler in `command_handler.py`.
-- **New app or website shortcut:** Add it to `APP_MAP` or `WEB_MAP` in `command_handler.py`.
-- **New reminder wording:** Edit `MESSAGES` in `reminders.py`. Sounds live in `PATTERNS` in `alert_sound.py`.
-- **New setting that must persist:** add it to `_config_snapshot()` in `main.py` and call `save_config()` when it changes.
-
----
 
 ## Credits
 
